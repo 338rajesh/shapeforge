@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]  # Minimum versions of required build tools
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shapeforge"
+version = "0.1.0"
+description = "A Python package for generating 2D or 3D domain containing geometry shapes of interest, following a specified distribution."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Rajesh Nakka", email = "338rajesh@gmail.com" }
+]
+maintainers = [
+    { name = "Rajesh Nakka", email = "338rajesh@gmail.com" }
+]
+keywords = ["Geometry", "RVE", "Equivalent Volume Element", "UnitCell"]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent"
+]
+dependencies = [
+    "gbox>=0.2.0",
+    "numpy>=2.2.0",
+    "scipy>=1.15.2",
+    "matplotlib>=3.10.0",
+]
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/338rajesh/shapeforge"
+Repository = "https://github.com/338rajesh/shapeforge"
+Issues = "https://github.com/338rajesh/shapeforge/issues"
+# Documentation = "https://shapeforge.readthedocs.io"  # Uncomment if docs are hosted
