@@ -6,83 +6,10 @@ constrained optimization problem.
 """
 
 from collections import deque
-from typing import Optional, Literal
-from dataclasses import dataclass
 
 import numpy as np
 
-
-class OptimisationProblem:
-    def __init__(self, params: Optional[dict] = None):
-        pass
-        self.params = params or {}
-        self.eval_count = {"f": 0, "grad_f": 0, "proj": 0}
-
-    def update_eval_count(self, key: str) -> int:
-        """
-        A decorator to update the evaluation count for the given key.
-        """
-
-        def decorator(func):
-            def wrapper(*args, **kwargs):
-                self.eval_count[key] += 1
-                return func(*args, **kwargs)
-
-            return wrapper
-
-        return decorator
-
-    @update_eval_count("f")
-    def f(self, x: np.ndarray) -> float:
-        """
-        Objective function to be minimized.
-        """
-        raise NotImplementedError("Objective function not implemented.")
-
-    @update_eval_count("grad_f")
-    def grad_f(self, x: np.ndarray) -> np.ndarray:
-        """
-        Gradient of the objective function.
-        """
-        raise NotImplementedError("Gradient function not implemented.")
-
-    @update_eval_count("proj")
-    def projection(self, x: np.ndarray) -> np.ndarray:
-        """
-        Projection onto the feasible set.
-        """
-        raise NotImplementedError("Projection function not implemented.")
-
-
-@dataclass
-class OptimisationResult:
-    x_optimal: list
-    status: Literal["success", "failure"] = "success"
-    failure_message: Optional[str] = None
-    f_history: Optional[list] = None
-    g_norm_history: Optional[list] = None
-    iter_count: int
-    f_eval_count: int = None
-    g_eval_count: int = None
-    proj_eval_count: int = None
-
-    def __post_init__(self):
-        n = self.iter_count
-        if self.f_history and (not len(self.f_history) == n):
-            raise ValueError("Length of f_history must match iter_count.")
-        if self.g_norm_history and (not len(self.g_norm_history) == n):
-            raise ValueError("Length of g_norm_history must match iter_count.")
-
-    def to_dict(self) -> dict:
-        return {
-            "x_optimal": self.x_optimal,
-            "iter_count": self.iter_count,
-            "f_eval_count": self.f_eval_count,
-            "g_eval_count": self.g_eval_count,
-            "f_history": self.f_history,
-            "g_norm_history": self.g_norm_history,
-            "proj_eval_count": self.proj_eval_count,
-        }
+from .optim import OptimisationProblem, OptimisationResult
 
 
 def nmspg(
@@ -141,6 +68,7 @@ def nmspg(
         """
         x_trial = x_ - ssl_ * g_
         d_ = objective.projection(x_trial) - x_
+        objective.eval_count["proj"] += 1
         return d_
 
     def d_inf_norm(x_: np.ndarray, g_: np.ndarray, ssl_: float = 1.0) -> bool:
@@ -175,6 +103,8 @@ def nmspg(
     x_k = np.array(x0, dtype=np.float32).copy()
     f_k = objective.f(x_k)
     g_k = objective.grad_f(x_k)
+    objective.eval_count["f"] += 1
+    objective.eval_count["grad_f"] += 1
     f_history = [f_k]
     g_norm_history = [np.linalg.norm(g_k, ord=np.inf)]
 
@@ -208,6 +138,7 @@ def nmspg(
         while True:
             x_trial = x_k + alpha * d_k
             f_trial = objective.f(x_trial)
+            objective.eval_count["f"] += 1
 
             # terminate if reached the max number of line search iterations
             if ls_iter >= ls_iter_max:
@@ -236,6 +167,7 @@ def nmspg(
         # --------------------------------------------
         x_kp1 = x_trial
         g_kp1 = objective.grad_f(x_kp1)
+        objective.eval_count["grad_f"] += 1
 
         # ---------------------------------------------
         #       Compute the spectral step length
