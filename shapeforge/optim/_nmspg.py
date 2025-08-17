@@ -24,6 +24,7 @@ def nmspg(
     sigma1=0.1,
     sigma2=0.9,
     ls_iter_max=20,
+    p_bar=None,
 ):
     """
     Non-monotone spectral projection gradient (NM-SPG) algorithm for solving
@@ -121,6 +122,9 @@ def nmspg(
         if d_inf_norm(x_k, g_k, ssl_=1.0) <= epsilon:
             status = "success"
             break
+
+        if p_bar is not None:
+            print(f"Iteration {k + 1}/{iter_max}, f: {f_k:.6f}", end="\r")
 
         # --------------------------------------------
         #       Get the search direction, d_k

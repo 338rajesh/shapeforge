@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]  # Minimum versions of required build tools
+requires = ["setuptools>=80.0", "wheel"]  # Minimum versions of required build tools
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,7 @@ name = "shapeforge"
 version = "0.1.0"
 description = "A Python package for generating 2D or 3D domain containing geometry shapes of interest, following a specified distribution."
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "MIT"
 authors = [
     { name = "Rajesh Nakka", email = "338rajesh@gmail.com" }
 ]
@@ -20,7 +20,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Physics",
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent"
 ]
 dependencies = [
@@ -42,3 +41,11 @@ Repository = "https://github.com/338rajesh/shapeforge"
 Issues = "https://github.com/338rajesh/shapeforge/issues"
 
 # Documentation = "https://shapeforge.readthedocs.io"  # Uncomment if docs are hosted
+
+# add `shapeforge` command to PATH
+[project.scripts]
+shapeforge = "shapeforge.shapeforge:main"
+
+[tool.setuptools.packages.find]
+# exclude any top-level dirs that should not be packaged (e.g. scratch)
+exclude = ["scratch", ".venv", ".git", "__pycache__", "build", "dist"]
