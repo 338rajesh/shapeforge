@@ -1,0 +1,41 @@
+verbose: true
+num_units: 1 # Number of unit cells to generate
+periodicity: true # Whether the domain is periodic
+
+cell_domain:
+  shape: rectangle
+  bounds:
+    x_min: 0
+    x_max: 20
+    y_min: 0
+    y_max: 20
+
+inclusions:
+  - shape: circle
+    volume_fraction: 0.2
+    parameters:
+      radius:
+        distribution: 
+          - name: norm
+          - mean: 2
+          - std: 0.5
+  - shape: ellipse
+    volume_fraction: 0.3
+    parameters:
+      semi_major_axis:
+        distribution: 
+          - name: uniform
+          - min: 5
+          - max: 10
+      semi_minor_axis:
+        distribution: 
+          - name: uniform
+          - min: 3
+          - max: 6
+
+min_surface_to_surface_distance: 0.5 # Minimum distance between shapes
+
+optimiser:
+  name: nmspg # Optimisation algorithm to use
+  parameters:
+    max_iterations: 1000 # Maximum number of iterations for the optimiser
