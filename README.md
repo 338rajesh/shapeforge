@@ -20,3 +20,34 @@ TODO udpate this list as features are implemented.
 - [ ] Yes, metrics are required, that compare generated vs requested.
 - [ ] GPU acceleration is surely in plan, but not now.
 - [ ] Yes, I am looking for scalable modules
+
+
+## For Developers
+
+Using [uv](https://docs.astral.sh/uv/) for Python Package and Project management.
+
+### Install dependencies
+
+```bash
+uv sync
+```
+
+### Add New dependencies
+
+```bash
+uv add package==version
+```
+
+### Add Dev-Dependency
+
+```bash
+uv add --group dev dev-package==version
+```
+
+### Run Tests
+
+```bash
+uv run --group dev pytest tests/
+```
+
+> Check [uv](https://docs.astral.sh/uv/)'s documentation for more details
