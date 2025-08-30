@@ -145,23 +145,16 @@ def initialise_inclusions(
 
     initialised_inclusions = {}
     for ith_incl_config in config:
-        _validate_dict(
+        shape, vf, params = _validate_dict(
             ith_incl_config,
             keys=["shape", "volume_fraction", "parameters"],
             val_types=[str, float, dict],
+            ret_val=True,
         )
-
-        shape = ith_incl_config.get("shape")
-        vf = ith_incl_config.get("volume_fraction")
-        params = ith_incl_config.get("parameters")
-
-        required_volume = cell_domain.cell_volume * vf
-        param_sampler = DistributionSampler(params, rng=rng)
-
         initialised_inclusions[shape] = generate_and_initialise_inclusions(
-            required_volume=required_volume,
+            required_volume=cell_domain.cell_volume * vf,
             shape=shape,
-            param_sampler=param_sampler,
+            param_sampler=DistributionSampler(params, rng=rng),
             spatial_param_sampler=xy_sampler,
             uns=uns,
         )

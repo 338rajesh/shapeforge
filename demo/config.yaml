@@ -1,6 +1,5 @@
 verbose: true
-num_units: 1 # Number of unit cells to generate
-periodicity: true # Whether the domain is periodic
+num_cells: 1 # Number of unit cells to generate
 
 cell_domain:
   shape: rectangle
@@ -12,29 +11,29 @@ cell_domain:
 
 inclusions:
   - shape: circle
-    volume_fraction: 0.2
+    volume_fraction: 0.6
     parameters:
       radius:
-        distribution: 
-          - name: norm
-          - mean: 2
-          - std: 0.5
+        distribution:
+          name: norm
+          loc: 2
+          scale: 0.5
   - shape: ellipse
-    volume_fraction: 0.3
+    volume_fraction: 0.2
     parameters:
       semi_major_axis:
-        distribution: 
-          - name: uniform
-          - min: 5
-          - max: 10
+        distribution:
+          name: uniform
+          loc: 4.0
+          scale: 0.5
       semi_minor_axis:
-        distribution: 
-          - name: uniform
-          - min: 3
-          - max: 6
+        distribution:
+          name: uniform
+          loc: 1.0
+          scale: 1.0
 
+periodicity: true # Whether the domain is periodic
 min_surface_to_surface_distance: 0.5 # Minimum distance between shapes
-
 optimiser:
   name: nmspg # Optimisation algorithm to use
   parameters:

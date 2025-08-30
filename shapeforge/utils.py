@@ -4,7 +4,7 @@ from pathlib import Path
 import yaml
 
 
-def load_yaml_config(file_path: str, show: bool = False) -> dict:
+def load_yaml(file_path: str, show: bool = False) -> dict:
     """
     Load a YAML configuration file and optionally print its contents.
 
@@ -40,7 +40,12 @@ def load_yaml_config(file_path: str, show: bool = False) -> dict:
     return config
 
 
-def _validate_dict(d: dict, keys: list, val_types: list = None) -> None:
+def _validate_dict(
+    d: dict,
+    keys: list,
+    val_types: list = None,
+    ret_val: bool = False,
+) -> None | tuple:
     """
     Validate that a dictionary contains specific keys.
 
@@ -54,7 +59,9 @@ def _validate_dict(d: dict, keys: list, val_types: list = None) -> None:
         A list of types corresponding to each key in `keys`. If provided,
         the function will also check that the values associated with each key
         are of the specified type.
-
+    ret_val : bool, optional
+        If True, the function will return the values associated with the keys
+        in the same order as the keys. Default is False.
     Raises
     ------
     ValueError
@@ -80,3 +87,5 @@ def _validate_dict(d: dict, keys: list, val_types: list = None) -> None:
                 f"Value for key '{key}' must be of type {val_type.__name__}, "
                 f"but got {type(d[key]).__name__}."
             )
+    if ret_val:
+        return tuple(d[key] for key in keys)
