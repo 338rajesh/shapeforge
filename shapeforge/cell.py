@@ -2,9 +2,11 @@ from typing import List
 
 import gbox as gb
 import matplotlib.pyplot as plt
+import numpy as np
 
 from .cell_domain import CellDomain
 from .inclusion import Inclusion
+from .optim import nmspg, OptimisationProblem
 
 
 class Cell:
@@ -38,12 +40,14 @@ class Cell:
 
         domain_bbox = self.domain.domain
         ax = domain_bbox.plot(
-            ax, facecolor="None", edgecolor="b", lw=1, alpha=0.5
+            ax, facecolor="grey", edgecolor="b", lw=1, alpha=0.5
         )
 
         for a_group_of_inclusions in self.inclusions.values():
             for a_inclusion in a_group_of_inclusions:
-                a_inclusion.plot(axs=ax, facecolor="None", edgecolor="k")
+                a_inclusion.plot(
+                    axs=ax, facecolor="y", edgecolor="blue", lw=1.0
+                )
 
         # TODO replace this custom axis formatting with a dedicated function
         ax.set_aspect("equal")
@@ -56,3 +60,42 @@ class Cell:
 
         if show:
             plt.show()
+
+    def remove_inclusion_overlaps(self) -> None:
+        # Run Optim Loop to ensure there are no overlaps among inclusions
+        #   Evaluate the cost function and gradients
+        #     Add Periodic copies, if required
+        #     cost evaluation
+        #     gradients evaluation
+        #   Update the inclusions positions
+        #   Check for convergence
+        #   If converged, return the optimised inclusions positions
+        opt_problem = InclusionOverlap()
+        result = nmspg(
+            objective=opt_problem,
+            x0=None,
+            iter_max=100,
+            iter_memory=10,
+            epsilon=1e-6,
+            spectral_step_min=1e-30,
+            spectral_step_max=1e30,
+            gamma=0.0001,
+            sigma1=0.1,
+            sigma2=0.9,
+            ls_iter_max=20,
+            p_bar=None,
+        )
+
+
+class InclusionOverlap(OptimisationProblem):
+    def __init__(self):
+        pass
+
+    def f(self, x: np.ndarray) -> float:
+        pass
+
+    def grad_f(self, x: np.ndarray) -> np.ndarray:
+        pass
+
+    def projection(self, x: np.ndarray) -> np.ndarray:
+        pass

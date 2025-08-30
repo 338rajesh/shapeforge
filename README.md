@@ -8,6 +8,28 @@ A python package for generating 2D or 3D domain containing geometry shapes of in
 pip install shapeforge
 ```
 
+## Cell
+
+A cell is an union of a domain and inclusions. At the moment, only rectangular
+domains are supported, while inclusions can be of any shape. The shapes can be
+described using positional and size parameters.
+
+- **Positional parameters**: These parameters define the position and orientation
+  of the shape. A set of `x`, `y`, `z`, $\theta$, and $\phi$ values defined for
+  a pivot line, and a pivot point on this line of a arbitrary shape can be
+  used to define its position and orientation in space.  
+  In cell generation process, these parameters are tuned while the size  
+  parameters are fixed.
+- **Size parameters**: These parameters define the size of the shape. These can be
+  arbitrary, depending on the shape. For example, a sphere can be defined using
+  its radius, while a cuboid can be defined using its length, width, and height.
+  In cell generation process, these parameters are fixed upfront while the
+  positional parameters are tuned to achieve the desired sptail distribution
+  of inclusions in the cell domain.
+
+> For flowchart of events involved in cell generation, please refer to
+> [Flow of Events](docs/flow_of_events.md).
+
 ## Planned features
 
 TODO udpate this list as features are implemented.

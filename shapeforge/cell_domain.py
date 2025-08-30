@@ -66,7 +66,7 @@ class CellDomain:
         cell_bounds = config["bounds"]
 
         if cell_shape != "rectangle":
-            raise ValueError(
+            raise NotImplementedError(
                 f"Unsupported cell shape '{cell_shape}'. "
                 f"Only 'rectangle' is supported."
             )
