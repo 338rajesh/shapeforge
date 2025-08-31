@@ -8,11 +8,16 @@ cell_domain:
     x_max: 20
     y_min: 0
     y_max: 20
+  init_method:
+    name: random
 
 inclusions:
+  - init_method: random
+  - periodicity: true # Whether the domain is periodic
+  - min_surface_to_surface_distance: 0.5 # Minimum distance between shapes
   - shape: circle
     volume_fraction: 0.6
-    parameters:
+    size_params:
       radius:
         distribution:
           name: norm
@@ -20,20 +25,18 @@ inclusions:
           scale: 0.5
   - shape: ellipse
     volume_fraction: 0.2
-    parameters:
-      semi_major_axis:
+    size_params:
+      semi_major_length:
         distribution:
           name: uniform
           loc: 4.0
           scale: 0.5
-      semi_minor_axis:
+      semi_minor_length:
         distribution:
           name: uniform
           loc: 1.0
           scale: 1.0
 
-periodicity: true # Whether the domain is periodic
-min_surface_to_surface_distance: 0.5 # Minimum distance between shapes
 optimiser:
   name: nmspg # Optimisation algorithm to use
   parameters:

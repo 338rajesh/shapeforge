@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from .cell_domain import CellDomain
-from .inclusion import Inclusion
 from .optim import nmspg, OptimisationProblem
 
 
@@ -13,7 +12,7 @@ class Cell:
     def __init__(
         self,
         domain: CellDomain,
-        inclusions: dict[str, List[Inclusion | gb.CirclesArray]],
+        inclusions: dict[str, List[gb.GShape | gb.CirclesArray]],
     ):
         self.domain = domain
         self.inclusions = inclusions
