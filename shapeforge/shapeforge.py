@@ -22,12 +22,12 @@ def generate_unit_cell(config: dict | str | Path) -> Cell:
     # Cell Initialization
     cell_domain = CellDomain.from_config(config.get("cell_domain", {}))
     inclusions = initialise_inclusions(
-        cell_domain,
         config.get("inclusions", []),
+        cell_domain,
         rng=np.random.default_rng(seed=config.get("randomness_seed")),
     )
     cell = Cell(cell_domain, inclusions)
-    cell.remove_inclusion_overlaps()
+    # cell.remove_inclusion_overlaps()
     print("Cell generation completed!.")
     return cell
 

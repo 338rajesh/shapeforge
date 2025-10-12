@@ -12,10 +12,12 @@ class Cell:
     def __init__(
         self,
         domain: CellDomain,
-        inclusions: dict[str, List[gb.GShape | gb.CirclesArray]],
+        inclusions: dict[str, List[gb.GShape]],
     ):
         self.domain = domain
         self.inclusions = inclusions
+        #
+        self.inclusions_uns = None  # type: List[gb.CirclesArray] | None
 
     def plot(self, fig=None, ax=None, show=False, f_path=None):
         """
@@ -60,6 +62,15 @@ class Cell:
         if show:
             plt.show()
 
+    def _get_inclusions_overlap_opt_problem(self) -> OptimisationProblem:
+        self.inclusions_uns = (
+            {k: [gs.uns() for gs in v] for k, v in self.inclusions.items()}
+            if self.inclusions_uns is None
+            else self.inclusions_uns
+        )
+        opt_problem = CellInclusionsOverlapProblem()
+        return opt_problem
+
     def remove_inclusion_overlaps(self) -> None:
         # Run Optim Loop to ensure there are no overlaps among inclusions
         #   Evaluate the cost function and gradients
@@ -69,7 +80,7 @@ class Cell:
         #   Update the inclusions positions
         #   Check for convergence
         #   If converged, return the optimised inclusions positions
-        opt_problem = InclusionOverlap()
+        opt_problem = self._get_inclusions_overlap_opt_problem()
         result = nmspg(
             objective=opt_problem,
             x0=None,
@@ -86,7 +97,7 @@ class Cell:
         )
 
 
-class InclusionOverlap(OptimisationProblem):
+class CellInclusionsOverlapProblem(OptimisationProblem):
     def __init__(self):
         pass
 

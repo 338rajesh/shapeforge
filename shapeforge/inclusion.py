@@ -40,11 +40,11 @@ class InclusionSampler:
 
 
 def initialise_inclusions(
+    incl_config: dict | list[dict],
     cell_domain: CellDomain,
-    config: dict | list[dict],
-    uns: bool = False,
+    *,
     rng: Optional[np.random.Generator] = None,
-) -> dict[str, List[gb.CirclesArray | gb.GShape]]:
+) -> dict[str, List[gb.GShape]]:
     """
     It is the main function to initialize inclusions based on the provided
     configuration. It iterates through the configuration list, extracting
@@ -63,23 +63,22 @@ def initialise_inclusions(
         - `shape`: The shape of the inclusion (e.g., "circle", "ellipse").
         - `volume_fraction`: The volume fraction of the inclusion.
         - `parameters`: Additional parameters specific to the inclusion shape.
-    uns : bool, optional
-        If True, the function will return inclusions as an
-        union of n-sphere representation or as a CirclesArray.
 
     Returns
     -------
-    List[Inclusion | gb.CirclesArray]
-        A list of inclusions initialized based on the configuration.
-
+    dict[str, list[gb.GShape]]
+        A dictionary where the keys are the shape names and the values are
+        lists of initialized inclusion objects of that shape.
     """
-    if not isinstance(config, (list, dict)):
-        raise TypeError(
-            "Configuration must be a dictionary or a list of dictionaries."
-        )
+    if isinstance(incl_config, dict):
+        incl_config = [incl_config]
 
-    if isinstance(config, dict):
-        config = [config]
+    non_dict_items = [i for i in incl_config if not isinstance(i, dict)]
+    if non_dict_items:
+        raise TypeError(
+            "Configuration must be a single dictionary or a list of "
+            f"dictionaries. Found non-dictionary items: {non_dict_items}."
+        )
 
     # xc and yc distributions are not specified in the config,
     x_min, x_max = cell_domain.x_bounds
@@ -109,8 +108,8 @@ def initialise_inclusions(
     }
     xy_sampler = DistributionSampler(xy_init_config, rng=rng)
 
-    initialised_inclusions: dict[str, List[gb.CirclesArray | gb.GShape]] = {}
-    for ith_incl_config in config:
+    initialised_inclusions: dict[str, List[gb.GShape]] = {}
+    for ith_incl_config in incl_config:
         shape, vf, params = _validate_dict(
             ith_incl_config,
             keys=["shape", "volume_fraction", "parameters"],
@@ -129,12 +128,6 @@ def initialise_inclusions(
             a_inclusion = incl_sampler()
             generated_inclusions.append(a_inclusion)
             cumulative_volume += a_inclusion.volume()
-
-        # make uns representation
-        if uns:
-            raise NotImplementedError(
-                "Union of n-sphere representation is not implemented yet."
-            )
 
         initialised_inclusions[shape] = generated_inclusions
     return initialised_inclusions
