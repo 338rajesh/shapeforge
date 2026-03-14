@@ -1,43 +1,30 @@
 verbose: true
 num_cells: 1 # Number of unit cells to generate
 
-cell_domain:
+domain:
   shape: rectangle
-  bounds:
-    x_min: 0
-    x_max: 20
-    y_min: 0
-    y_max: 20
-  init_method:
-    name: random
+  bounds: [0, 0, 20, 20]  # x_min, y_min, x_max, y_max
 
-inclusions:
-  - init_method: random
-  - periodicity: true # Whether the domain is periodic
-  - min_surface_to_surface_distance: 0.5 # Minimum distance between shapes
-  - shape: circle
-    volume_fraction: 0.6
-    size_params:
-      radius:
-        distribution:
-          name: norm
-          loc: 2
-          scale: 0.5
-  - shape: ellipse
-    volume_fraction: 0.2
-    size_params:
-      semi_major_length:
-        distribution:
-          name: uniform
-          loc: 4.0
-          scale: 0.5
-      semi_minor_length:
-        distribution:
-          name: uniform
-          loc: 1.0
-          scale: 1.0
+packing:
+  periodic: true
+  min_gap: 0.5
 
-optimiser:
-  name: nmspg # Optimisation algorithm to use
-  parameters:
-    max_iterations: 1000 # Maximum number of iterations for the optimiser
+shapes:
+  - circle:
+      vf: 0.6
+      count: null
+      radius: normal(2, 0.5)
+  - ellipse:
+      vf: 0.1
+      count: null
+      semi_major: normal(2, 0.1)
+      semi_minor: normal(1, 0.1)
+
+# # ----------------------------------------------
+
+engine:
+  init_method: random
+  optimiser:
+    name: nmspg
+    max_iter: 1000
+  adjust_bounds_to_exact_vf: false

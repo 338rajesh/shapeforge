@@ -29,9 +29,7 @@ class RosenbrockProblem(OptimisationProblem):
         self.upper = 1.5 * np.ones(dim)
 
     def f(self, x):
-        return np.sum(
-            100.0 * (x[1:] - x[:-1] ** 2.0) ** 2.0 + (1 - x[:-1]) ** 2.0
-        )
+        return np.sum(100.0 * (x[1:] - x[:-1] ** 2.0) ** 2.0 + (1 - x[:-1]) ** 2.0)
 
     def grad_f(self, x):
         grad = np.zeros_like(x)
@@ -119,7 +117,6 @@ def test_nmspg_rosenbrock():
     print(f"Gradient evaluations: {result.g_eval_count}")
     print(f"Projection evaluations: {result.proj_eval_count}")
     print(f"Final function value: {result.f_history[-1]}")
-
 
 
 # if __name__ == "__main__":

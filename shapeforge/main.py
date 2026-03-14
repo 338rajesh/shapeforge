@@ -3,8 +3,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .cell_domain import CellDomain
-from .inclusion import initialise_inclusions
+from .cell import CellDomain, initialise_inclusions
 from .cell import Cell
 from .utils import load_yaml
 
@@ -41,6 +40,9 @@ def main():
     )
     args = parser.parse_args()
 
+    cfg_fp = args.config_file
+
+    print(f"Generating the Cell with configuration from '{cfg_fp}'")
     generate_unit_cell(args.config_file)
 
 

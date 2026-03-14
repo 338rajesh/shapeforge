@@ -251,9 +251,7 @@ def nmspg(
         k += 1
     else:
         # If the loop completes without breaking, we reached iter_max
-        failure_message = (
-            "Maximum number of iterations reached without convergence."
-        )
+        failure_message = "Maximum number of iterations reached without convergence."
 
     return OptimisationResult(
         x_optimal=x_k.tolist(),
