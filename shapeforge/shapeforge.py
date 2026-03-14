@@ -1,58 +1,48 @@
-from scipy import stats
+import argparse
+from pathlib import Path
 
-from ._base import CircularInclusion, UnitCellDomain
+import numpy as np
+
+from .cell_domain import CellDomain
+from .inclusion import initialise_inclusions
+from .cell import Cell
+from .utils import load_yaml
 
 
-def get_initialized_inclusions(
-    vf: float = 0.5,
-    bounds: tuple = (0.0, 0.0, 1.0, 1.0),
-    radii_mean: float = 1.5,
-    radii_std: float = 0.5,
-):
-    xlb, ylb, xub, yub = bounds
-    domain_area = (xub - xlb) * (yub - ylb)
-    inclusion_area = vf * domain_area
+def generate_unit_cell(config: dict | str | Path) -> Cell:
+    """
+    Generate a unit cell with the specified configuration.
+    """
+    if isinstance(config, (str, Path)):
+        config = load_yaml(config)
 
-    xc_distribution = stats.uniform(xlb, xub - xlb)
-    yc_distribution = stats.uniform(ylb, yub - ylb)
+    if not isinstance(config, dict):
+        raise ValueError("Expecting config to be a dictionary.")
 
-    # Ensure the radius distribution is valid (non-negative)
-    r_min = max(0, radii_mean - 3 * radii_std)
-    r_max = radii_mean + 3 * radii_std
-    if r_min < 0:
-        raise ValueError("Radius distribution must have non-negative support.")
-    if r_max <= 0:
-        raise ValueError("Radius distribution must have positive support.")
-
-    radius_distribution = stats.truncnorm(
-        a=(r_min - radii_mean) / radii_std,
-        b=(r_max - radii_mean) / radii_std,
-        loc=radii_mean,
-        scale=radii_std,
+    # Cell Initialization
+    cell_domain = CellDomain.from_config(config.get("cell_domain", {}))
+    inclusions = initialise_inclusions(
+        config.get("inclusions", []),
+        cell_domain,
+        rng=np.random.default_rng(seed=config.get("randomness_seed")),
     )
-    inclusion = CircularInclusion(
-        xc_distribution=xc_distribution,
-        yc_distribution=yc_distribution,
-        radius_distribution=radius_distribution,
-        name="Circular Inclusion",
+    cell = Cell(cell_domain, inclusions)
+    # cell.remove_inclusion_overlaps()
+    print("Cell generation completed!.")
+    return cell
+
+
+def main():
+    parser = argparse.ArgumentParser(description=("ShapeForge CLI"))
+    parser.add_argument(
+        "config_file",
+        type=str,
+        help="Path to the YAML configuration file for the shape forge.",
     )
-    return inclusion.generate(cum_area=inclusion_area)
+    args = parser.parse_args()
+
+    generate_unit_cell(args.config_file)
 
 
-def undo_overlaps(inclusions: list):
-    # Evaluate the cost function and gradients of overlaps
-    # Update the positions of the inclusions to minimize overlaps
-    return
-
-
-def make_rve_with_circular_inclusions(
-    vf: float = 0.5,
-    bounds: tuple = (0.0, 0.0, 1.0, 1.0),
-    radii_mean: float = 1.5,
-    radii_std: float = 0.5,
-) -> UnitCellDomain:
-    init_inclusions = get_initialized_inclusions(
-        vf, bounds, radii_mean=radii_mean, radii_std=radii_std
-    )
-
-    return UnitCellDomain(inclusions=init_inclusions, bounds=bounds)
+if __name__ == "__main__":
+    main()
