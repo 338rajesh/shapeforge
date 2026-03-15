@@ -1,4 +1,6 @@
-from typing import List, Optional, Sequence
+import math
+from dataclasses import dataclass
+from typing import List, Optional, Sequence, Any
 
 import gbox as gb
 import matplotlib.pyplot as plt
@@ -48,16 +50,15 @@ class CellDomain:
         return self.domain.volume
 
     @classmethod
-    def from_config(cls, config: dict) -> "CellDomain":
+    def from_dict(cls, config: dict[str, Any]) -> "CellDomain":
         """
-        Create a CellDomain instance from a configuration dictionary. It is
-        expected that the configuration contains `shape` and `bounds` keys
-        that define the shape of the cell domain and its bounds, respectively.
+        Create a CellDomain instance from a dictionary, with the following
+        structure:
 
-        Parameters
-        ----------
-        config : dict
-            Configuration dictionary containing bounds and other parameters.
+        ```py
+        # dict(shape=<name>, bounds=[x_min, y_min, x_max, y_max])
+        domain_config = dict(shape=rectangle, bounds=[0, 0, 20, 25])
+        ```
 
         Returns
         -------
@@ -72,12 +73,7 @@ class CellDomain:
             raise NotImplementedError(
                 f"Unsupported cell shape '{cell_shape}'. Only 'rectangle' is supported."
             )
-
-        _validate_dict(cell_bounds, ["x_min", "y_min", "x_max", "y_max"])
-        x_min = cell_bounds["x_min"]
-        y_min = cell_bounds["y_min"]
-        x_max = cell_bounds["x_max"]
-        y_max = cell_bounds["y_max"]
+        x_min, y_min, x_max, y_max = cell_bounds
 
         if x_min >= x_max or y_min >= y_max:
             raise ValueError(
@@ -88,12 +84,35 @@ class CellDomain:
         return cls(bounds=[x_min, y_min, x_max, y_max])
 
 
+@dataclass
+class PositionSampler:
+    xc_sampler: DistributionSampler
+    yc_sampler: DistributionSampler
+    zc_sampler: DistributionSampler = None
+    azimuthal_angle_sampler: DistributionSampler = None
+    polar_angle_sampler: DistributionSampler = None
+
+    def sample(self) -> dict[str, float]:
+        out = dict(
+            xc=self.xc_sampler.sample(),
+            yc=self.yc_sampler.sample(),
+        )
+        if self.zc_sampler is not None:
+            out["zc"] = self.zc_sampler.sample()
+        if self.azimuthal_angle_sampler is not None:
+            out["azimuthal_angle"] = self.azimuthal_angle_sampler.sample()
+        if self.polar_angle_sampler is not None:
+            out["polar_angle"] = self.polar_angle_sampler.sample()
+
+        return out
+
+
 class InclusionSampler:
     def __init__(
         self,
         shape: str | gb.GShape,
-        spatial_param_sampler: DistributionSampler,
-        size_param_sampler: DistributionSampler,
+        pos_sampler: DistributionSampler,
+        size_samplers: dict[str, DistributionSampler],
     ):
         g_shape = getattr(gb, shape) if isinstance(shape, str) else shape
 
@@ -108,21 +127,22 @@ class InclusionSampler:
             )
 
         self.shape: gb.GShape = g_shape
-        self.spatial_param_sampler = spatial_param_sampler
-        self.size_param_sampler = size_param_sampler
+        self.pos_sampler = pos_sampler
+        self.size_samplers = size_samplers
 
-    def __call__(self) -> gb.GShape:
-        pos_params = self.spatial_param_sampler.sample()
-        size_params = self.size_param_sampler.sample()
+    def sample(self) -> gb.GShape:
+        pos_params = self.pos_sampler.sample()
+        size_params = {k: v.sample() for k, v in self.size_samplers.items()}
         return self.shape.from_params(
             positional_params=pos_params, size_params=size_params
         )
 
 
-def initialise_inclusions(
-    incl_config: dict | list[dict],
+def initialise_shapes(
+    shapes_params: dict | list[dict],
     cell_domain: CellDomain,
     *,
+    init_method: str = "uniform",
     rng: Optional[np.random.Generator] = None,
 ) -> dict[str, List[gb.GShape]]:
     """
@@ -140,9 +160,9 @@ def initialise_inclusions(
         A single dictionary or a list of dictionaries, each containing
         configuration for a specific inclusion type. Each dictionary should
         have the following keys:
-        - `shape`: The shape of the inclusion (e.g., "circle", "ellipse").
-        - `volume_fraction`: The volume fraction of the inclusion.
-        - `parameters`: Additional parameters specific to the inclusion shape.
+        - `name`: The shape of the inclusion (e.g., "circle", "ellipse").
+        - `vf`: The volume fraction of the inclusion.
+        - `params`: Additional parameters specific to the inclusion shape.
 
     Returns
     -------
@@ -150,10 +170,10 @@ def initialise_inclusions(
         A dictionary where the keys are the shape names and the values are
         lists of initialized inclusion objects of that shape.
     """
-    if isinstance(incl_config, dict):
-        incl_config = [incl_config]
+    if isinstance(shapes_params, dict):
+        shapes_params = [shapes_params]
 
-    non_dict_items = [i for i in incl_config if not isinstance(i, dict)]
+    non_dict_items = [nd for nd in shapes_params if not isinstance(nd, dict)]
     if non_dict_items:
         raise TypeError(
             "Configuration must be a single dictionary or a list of "
@@ -163,66 +183,167 @@ def initialise_inclusions(
     # xc and yc distributions are not specified in the config,
     x_min, x_max = cell_domain.x_bounds
     y_min, y_max = cell_domain.y_bounds
-    xy_init_config = {
-        "xc": {
-            "distribution": {
-                "name": "uniform",
-                "loc": x_min,
-                "scale": x_max - x_min,
-            }
-        },
-        "yc": {
-            "distribution": {
-                "name": "uniform",
-                "loc": y_min,
-                "scale": y_max - y_min,
-            }
-        },
-        "major_axis_angle": {
-            "distribution": {
-                "name": "uniform",
-                "loc": 0.0,
-                "scale": 2.0 * np.pi,
-            }
-        },
-    }
-    xy_sampler = DistributionSampler(xy_init_config, rng=rng)
+    if init_method != "uniform":
+        raise NotImplementedError(
+            f"Init method {init_method} for inclusions is not supported."
+        )
+    pos_sampler = PositionSampler(
+        xc_sampler=DistributionSampler.from_signature(
+            f"uniform({x_min}, {x_max - x_min})", rng=rng
+        ),
+        yc_sampler=DistributionSampler.from_signature(
+            f"uniform({y_min}, {y_max - y_min})", rng=rng
+        ),
+    )
 
     initialised_inclusions: dict[str, List[gb.GShape]] = {}
-    for ith_incl_config in incl_config:
-        shape, vf, params = _validate_dict(
+    cum_vf = 0.0
+    for ith_incl_config in shapes_params:
+        name, vf, size_sampler_sigs = _validate_dict(
             ith_incl_config,
-            keys=["shape", "volume_fraction", "parameters"],
+            keys=["name", "vf", "params"],
             val_types=[str, float, dict],
+            val_ranges=[None, (0.0, 1.0), None],
             ret_val=True,
         )
+        cum_vf += vf
+        if cum_vf > 1.0:
+            raise ValueError(
+                "Cumulative volume fraction of given shapes exceeds 1.0."
+            )
+        size_samplers = {
+            p_name: DistributionSampler.from_signature(sig, rng=rng)
+            for p_name, sig in size_sampler_sigs.items()
+        }
+
+        # xy_sampler independent of shape
+        # params: dependent of shape
         incl_sampler = InclusionSampler(
-            shape=shape,
-            spatial_param_sampler=xy_sampler,
-            size_param_sampler=DistributionSampler(params, rng=rng),
+            shape=name,
+            pos_sampler=pos_sampler,
+            size_samplers=size_samplers,
         )
         required_volume = cell_domain.cell_volume * vf
         cumulative_volume = 0.0
         generated_inclusions = []
         while cumulative_volume < required_volume:
-            a_inclusion = incl_sampler()
+            a_inclusion = incl_sampler.sample()
             generated_inclusions.append(a_inclusion)
             cumulative_volume += a_inclusion.volume()
 
-        initialised_inclusions[shape] = generated_inclusions
+        initialised_inclusions[name] = generated_inclusions
     return initialised_inclusions
+
+
+class CellCirclesOverlap(OptimisationProblem):
+    """
+    Overlap cost for a 2-D cell with circular inclusions, no periodicity.
+
+    Parameters
+    ----------
+    domain : CellDomain
+    shapes : dict[str, list[gb.GShape]]
+        Output of ``initialise_shapes``; all shapes must be circles.
+    ssd_ratio : float
+        Minimum surface-to-surface gap as a fraction of each circle's
+        radius.  Default 0.04 (4 %).
+    proj_buffer_ratio : float
+        Projection buffer thickness = proj_buffer_ratio × radius.
+        Default 2.0 (mirrors Julia default).
+    """
+
+    def __init__(
+        self,
+        domain: CellDomain,
+        shapes: dict[str, list[gb.Circle]],
+        *,
+        ssd_ratio: float = 0.05,
+        proj_buffer_ratio: float = 2.0,
+    ):
+        super().__init__()
+        self.domain = domain
+        self.shapes = shapes
+
+        self._inclusions: list[gb.Circle] = []
+        for g in shapes.values():
+            self._inclusions.extend(g)
+        self._num_inclusions = len(self._inclusions)
+
+        self.x0 = [i.centre.x for i in self._inclusions] + [
+            i.centre.y for i in self._inclusions
+        ]
+        self._radii = np.array([i.radius for i in self._inclusions])
+        self._ssd = ssd_ratio * self._radii
+        self._proj_buffer = proj_buffer_ratio * self._radii
+
+    def _overlap_cost_and_gradient(self, positions: np.ndarray):
+        xs, ys = positions.T
+
+        cost = 0.0
+        grad_x = np.zeros(self._num_inclusions)
+        grad_y = np.zeros(self._num_inclusions)
+
+        for i in range(self._num_inclusions):
+            for j in range(1 + i, self._num_inclusions):
+                dx = xs[i] - xs[j]
+                dy = ys[i] - ys[j]
+                dist = math.hypot(dx, dy)
+
+                dca = self._radii[i] + self._radii[j] + self._ssd[i]
+                c = dca - dist
+
+                if c > 0.0:
+                    dol = c / (dist + 1e-6)  # degree of overlap
+
+                    cost += c * c  # making convex
+
+                    tmp_gx = dol * dx
+                    tmp_gy = dol * dy
+                    grad_x[i] += tmp_gx
+                    grad_x[j] -= tmp_gx
+                    grad_y[i] += tmp_gy
+                    grad_y[j] -= tmp_gy
+
+        grad = -2.0 * np.column_stack([grad_x, grad_y])
+        return cost, grad
+
+    def f_and_grad(self, x: np.ndarray) -> tuple[float, np.ndarray]:
+        positions = x.reshape(-1, 2, order="F")  # x, y
+        f, g = self._overlap_cost_and_gradient(positions)
+        self.eval_count["f_and_g"] += 1
+        return f, g.flatten(order="F")
+
+    def projection(self, x: np.ndarray) -> np.ndarray:
+        positions = x.reshape(-1, 2, order="F")
+        xlb, xub = self.domain.x_bounds
+        ylb, yub = self.domain.y_bounds
+
+        for i in range(self._num_inclusions):
+            buf_len = self._proj_buffer[i] * np.random.random()
+            if positions[i, 0] > xub:
+                positions[i, 0] = xub - buf_len
+            elif positions[i, 0] < xlb:
+                positions[i, 0] = xlb + buf_len
+
+            if positions[i, 1] > yub:
+                positions[i, 1] = yub - buf_len
+            elif positions[i, 1] < ylb:
+                positions[i, 1] = ylb + buf_len
+
+        self.eval_count["proj"] += 1
+        return positions.flatten(order="F")
 
 
 class Cell:
     def __init__(
         self,
         domain: CellDomain,
-        inclusions: dict[str, List[gb.GShape]],
+        shapes: dict[str, List[gb.GShape]] = None,
     ):
         self.domain = domain
-        self.inclusions = inclusions
+        self.shapes = shapes
         #
-        self.inclusions_uns = None  # type: List[gb.CirclesArray] | None
+        self._opt_problem = None
 
     def plot(self, fig=None, ax=None, show=False, f_path=None):
         """
@@ -244,12 +365,15 @@ class Cell:
         if fig is None or ax is None:
             fig, ax = plt.subplots()
 
-        domain_bbox = self.domain.domain
-        ax = domain_bbox.plot(ax, facecolor="grey", edgecolor="b", lw=1, alpha=0.5)
+        shape_options = dict(facecolor="white", edgecolor="None")
+        bg_options = dict(facecolor="black", edgecolor="None")
 
-        for a_group_of_inclusions in self.inclusions.values():
+        domain_bbox = self.domain.domain
+        ax = domain_bbox.plot(ax, lw=1, alpha=0.5, **bg_options)
+
+        for a_group_of_inclusions in self.shapes.values():
             for a_inclusion in a_group_of_inclusions:
-                a_inclusion.plot(axs=ax, facecolor="y", edgecolor="blue", lw=1.0)
+                a_inclusion.plot(axs=ax, shape_options=shape_options)
 
         # TODO replace this custom axis formatting with a dedicated function
         ax.set_aspect("equal")
@@ -262,17 +386,9 @@ class Cell:
 
         if show:
             plt.show()
+        plt.close(fig)
 
-    def _get_inclusions_overlap_opt_problem(self) -> OptimisationProblem:
-        self.inclusions_uns = (
-            {k: [gs.uns() for gs in v] for k, v in self.inclusions.items()}
-            if self.inclusions_uns is None
-            else self.inclusions_uns
-        )
-        opt_problem = CellInclusionsOverlapProblem()
-        return opt_problem
-
-    def remove_inclusion_overlaps(self) -> None:
+    def remove_inclusion_overlaps(self, ssd_ratio, proj_buffer_ratio) -> None:
         # Run Optim Loop to ensure there are no overlaps among inclusions
         #   Evaluate the cost function and gradients
         #     Add Periodic copies, if required
@@ -281,10 +397,15 @@ class Cell:
         #   Update the inclusions positions
         #   Check for convergence
         #   If converged, return the optimised inclusions positions
-        opt_problem = self._get_inclusions_overlap_opt_problem()
+        self._opt_problem = CellCirclesOverlap(
+            domain=self.domain,
+            shapes=self.shapes,
+            ssd_ratio=ssd_ratio,
+            proj_buffer_ratio=proj_buffer_ratio,
+        )
         result = nmspg(
-            objective=opt_problem,
-            x0=None,
+            objective=self._opt_problem,
+            x0=self._opt_problem.x0,
             iter_max=100,
             iter_memory=10,
             epsilon=1e-6,
@@ -297,16 +418,9 @@ class Cell:
             p_bar=None,
         )
 
-
-class CellInclusionsOverlapProblem(OptimisationProblem):
-    def __init__(self):
-        pass
-
-    def f(self, x: np.ndarray) -> float:
-        pass
-
-    def grad_f(self, x: np.ndarray) -> np.ndarray:
-        pass
-
-    def projection(self, x: np.ndarray) -> np.ndarray:
-        pass
+        positions = result.x_optimal.reshape(-1, 2, order="F")
+        for k, shapes_list in self.shapes.items():
+            for idx, a_shape in enumerate(shapes_list):
+                a_shape.centre = gb.Point2D(
+                    positions[idx, 0], positions[idx, 1]
+                )

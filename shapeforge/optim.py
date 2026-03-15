@@ -17,19 +17,15 @@ class OptimisationProblem:
     def __init__(self, params: Optional[dict] = None):
         pass
         self.params = params or {}
-        self.eval_count = {"f": 0, "grad_f": 0, "proj": 0}
+        self.eval_count = {"f_and_g": 0, "proj": 0}
 
-    def f(self, x: np.ndarray) -> float:
+    def f_and_grad(self, x: np.ndarray) -> float:
         """
-        Objective function to be minimized.
+        Evaluate the objective function and its gradient
         """
-        raise NotImplementedError("Objective function not implemented.")
-
-    def grad_f(self, x: np.ndarray) -> np.ndarray:
-        """
-        Gradient of the objective function.
-        """
-        raise NotImplementedError("Gradient function not implemented.")
+        raise NotImplementedError(
+            "Objective function and gradient evaluation not implemented. "
+        )
 
     def projection(self, x: np.ndarray) -> np.ndarray:
         """
@@ -40,18 +36,18 @@ class OptimisationProblem:
 
 @dataclass
 class OptimisationResult:
-    x_optimal: list
+    x_optimal: np.ndarray
     status: Literal["success", "failure"] = "success"
     failure_message: Optional[str] = None
     f_history: Optional[list] = None
     g_norm_history: Optional[list] = None
     iter_count: int = 0
-    f_eval_count: int = 0
-    g_eval_count: int = 0
+    f_and_g_eval_count: int = 0
     proj_eval_count: int = 0
 
     def __post_init__(self):
         n = self.iter_count
+        self.x_optimal = np.array(self.x_optimal)
         if self.f_history and (not len(self.f_history) == n + 1):
             raise ValueError("Length of f_history must match iter_count.")
         if self.g_norm_history and (not len(self.g_norm_history) == n + 1):
@@ -61,8 +57,7 @@ class OptimisationResult:
         return {
             "x_optimal": self.x_optimal,
             "iter_count": self.iter_count,
-            "f_eval_count": self.f_eval_count,
-            "g_eval_count": self.g_eval_count,
+            "f_and_g_eval_count": self.f_and_g_eval_count,
             "f_history": self.f_history,
             "g_norm_history": self.g_norm_history,
             "proj_eval_count": self.proj_eval_count,
@@ -159,10 +154,7 @@ def nmspg(
             return spectral_step_max
 
     x_k = np.array(x0, dtype=np.float32).copy()
-    f_k = objective.f(x_k)
-    g_k = objective.grad_f(x_k)
-    objective.eval_count["f"] += 1
-    objective.eval_count["grad_f"] += 1
+    f_k, g_k = objective.f_and_grad(x_k)
     f_history = [f_k]
     g_norm_history = [np.linalg.norm(g_k, ord=np.inf)]
 
@@ -198,8 +190,7 @@ def nmspg(
         slope_local = np.dot(g_k, d_k)
         while True:
             x_trial = x_k + alpha * d_k
-            f_trial = objective.f(x_trial)
-            objective.eval_count["f"] += 1
+            f_trial, _ = objective.f_and_grad(x_trial)
 
             # terminate if reached the max number of line search iterations
             if ls_iter >= ls_iter_max:
@@ -227,8 +218,7 @@ def nmspg(
         #       Update the point, x_k
         # --------------------------------------------
         x_kp1 = x_trial
-        g_kp1 = objective.grad_f(x_kp1)
-        objective.eval_count["grad_f"] += 1
+        _, g_kp1 = objective.f_and_grad(x_kp1)
 
         # ---------------------------------------------
         #       Compute the spectral step length
@@ -251,7 +241,9 @@ def nmspg(
         k += 1
     else:
         # If the loop completes without breaking, we reached iter_max
-        failure_message = "Maximum number of iterations reached without convergence."
+        failure_message = (
+            "Maximum number of iterations reached without convergence."
+        )
 
     return OptimisationResult(
         x_optimal=x_k.tolist(),
@@ -260,7 +252,6 @@ def nmspg(
         f_history=f_history,
         g_norm_history=g_norm_history,
         iter_count=k,
-        f_eval_count=objective.eval_count["f"],
-        g_eval_count=objective.eval_count["grad_f"],
+        f_and_g_eval_count=objective.eval_count["f_and_g"],
         proj_eval_count=objective.eval_count["proj"],
     )

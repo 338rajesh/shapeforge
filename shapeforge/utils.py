@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import yaml
@@ -7,6 +8,7 @@ from functools import partial
 from typing import Optional
 
 import numpy as np
+import numpy.typing as npt
 from scipy import stats
 
 
@@ -15,7 +17,14 @@ class DistributionSampler:
     A class to create a sampler for various distributions.
     """
 
-    def __init__(self, spec: dict, rng: Optional[np.random.Generator] = None):
+    def __init__(
+        self,
+        method: str,
+        loc: float,
+        scale: float,
+        rng: Optional[np.random.Generator] = None,
+        rvs_kwargs=None,
+    ):
         """
         Initialize the sampler with a specification of distributions.
 
@@ -54,34 +63,40 @@ class DistributionSampler:
         # keys 'semi_major_axis' and 'semi_minor_axis'
         ```
         """
-        self.samplers = self._make_samplers(spec, rng)
 
-    @staticmethod
-    def _make_samplers(spec: dict, rng: np.random.Generator) -> dict:
-        samplers = {}
-        if rng is None:
-            rng = np.random.default_rng()
-        for a_quant_name in spec:
-            a_quant_dist_spec = spec[a_quant_name]
+        rv: stats.rv_continuous = getattr(stats, method, None)
+        if rv is None or not hasattr(rv, "rvs"):
+            raise ValueError(
+                f"Unsupported distribution: {method}. "
+                "Ensure it is a valid scipy.stats distribution."
+            )
 
-            _validate_dict(a_quant_dist_spec, keys=["distribution"], val_types=[dict])
-            dist_spec = a_quant_dist_spec.get("distribution")
+        self.sampler = partial(
+            rv.rvs,
+            random_state=rng or np.random.default_rng(),
+            loc=loc,
+            scale=scale,
+            **(rvs_kwargs or {}),
+        )
 
-            _validate_dict(dist_spec, keys=["name"], val_types=[str])
-            dist_name = dist_spec["name"].lower()
+    @classmethod
+    def from_signature(
+        cls, sig: str, rng=None, rvs_kwargs=None
+    ) -> "DistributionSampler":
+        if not isinstance(sig, str):
+            raise ValueError("Signature must be a string.")
+        match = re.match(r"(\w+)\((.*)\)", sig)
+        if not match:
+            raise ValueError(
+                "Invalid signature: it must be in the form of"
+                "<method_name>(<loc>, <scale>). Example: uniform(2.0, 0.1)"
+            )
+        method = match.group(1)
+        loc, scale = [float(a.strip()) for a in match.group(2).split(",")]
 
-            rv: stats.rv_continuous = getattr(stats, dist_name, None)
-            if rv is None or not hasattr(rv, "rvs"):
-                raise ValueError(
-                    f"Unsupported distribution: {dist_name}. "
-                    "Ensure it is a valid scipy.stats distribution."
-                )
+        return cls(method, loc, scale, rng, rvs_kwargs)
 
-            params = {k: v for k, v in dist_spec.items() if k != "name"}
-            samplers[a_quant_name] = partial(rv.rvs, random_state=rng, **params)
-        return samplers
-
-    def sample(self, size: int = 1) -> dict[str, np.ndarray | float]:
+    def sample(self, size: int = 1) -> npt.NDArray | float:
         """
         Sample from the distributions defined in the spec.
 
@@ -99,27 +114,10 @@ class DistributionSampler:
         """
         if not isinstance(size, int) or size < 1:
             raise ValueError("Size must be a positive integer > 0.")
-
-        gen_samples = {}
-        for a_quant_name, a_sampler in self.samplers.items():
-            a = np.asarray(a_sampler(size=size))
-            if size == 1:
-                a = a[0].item()
-            gen_samples[a_quant_name] = a
-        return gen_samples
-        # outcomes = []
-        # for a_sampler in self.samplers:
-        #     outcomes.append(np.asarray(a_sampler(size=size)))
-        # if self._single:
-        #     return outcomes[0]
-
-        # handle size=1 case
-        # if size == 1 and len(outcomes) == 1:
-        #     return outcomes[0][0]
-        # elif size == 1:
-        #     return [outcome[0] for outcome in outcomes]
-        # else:
-        #     return outcomes
+        a = np.asarray(self.sampler(size=size))
+        if size == 1:
+            return a[0].item()
+        return a
 
 
 def load_yaml(file_path: str, show: bool = False) -> dict:
@@ -140,7 +138,9 @@ def load_yaml(file_path: str, show: bool = False) -> dict:
     """
     fp = Path(file_path).resolve()
     if not fp.exists():
-        raise FileNotFoundError(f"Configuration file '{file_path}' does not exist.")
+        raise FileNotFoundError(
+            f"Configuration file '{file_path}' does not exist."
+        )
     if not fp.suffix == ".yaml":
         raise ValueError(
             f"Configuration file '{file_path}' must have a .yaml extension."
@@ -160,6 +160,7 @@ def _validate_dict(
     d: dict,
     keys: list,
     val_types: list = None,
+    val_ranges: list[tuple | None] = None,
     ret_val: bool = False,
 ) -> None | tuple:
     """
@@ -190,7 +191,11 @@ def _validate_dict(
 
     missing_keys = [key for key in keys if key not in d]
     if missing_keys:
-        raise ValueError(f"Missing required keys: {', '.join(missing_keys)}")
+        missing_keys_str = ", ".join(missing_keys)
+        given_keys_str = ", ".join(d.keys())
+        raise ValueError(
+            f"Missing keys: '{missing_keys_str}'\nGiven keys: '{given_keys_str}'"
+        )
     if val_types is None:
         val_types = [None] * len(keys)
     if len(keys) != len(val_types):
@@ -203,5 +208,19 @@ def _validate_dict(
                 f"Value for key '{key}' must be of type {val_type.__name__}, "
                 f"but got {type(d[key]).__name__}."
             )
+
+    if val_ranges is None:
+        val_ranges = [None] * len(keys)
+    if len(keys) != len(val_ranges):
+        raise ValueError("Length of keys and val_ranges must match.")
+    for key, val_range in zip(keys, val_ranges):
+        if val_range is None:
+            continue
+        if d[key] < val_range[0] or d[key] > val_range[1]:
+            raise ValueError(
+                f"Value for key '{key}' must be between {val_range[0]}, and "
+                f"{val_range[1]}, but got {d[key]}"
+            )
+
     if ret_val:
         return tuple(d[key] for key in keys)

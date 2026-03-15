@@ -1,29 +1,28 @@
-verbose: true
-num_cells: 1 # Number of unit cells to generate
+num_cells: 2 # Number of unit cells to generate
 
 domain:
   shape: rectangle
-  bounds: [0, 0, 20, 20]  # x_min, y_min, x_max, y_max
-
-packing:
-  periodic: true
-  min_gap: 0.5
+  bounds: [0, 0, 30, 20] # x_min, y_min, x_max, y_max
 
 shapes:
-  - circle:
-      vf: 0.6
-      count: null
-      radius: normal(2, 0.5)
-  - ellipse:
-      vf: 0.1
-      count: null
-      semi_major: normal(2, 0.1)
-      semi_minor: normal(1, 0.1)
+  - name: Circle
+    vf: 0.6
+    params:
+      radius: uniform(2, 0.5)
 
+output_dir: /home/rajesh/work/repos/shapeforge/scratch/outputs
+
+packing:
+  periodic: false
+  min_gap: 0.05
+
+verbose: false
+rng_seed: 42
 # # ----------------------------------------------
 
 engine:
-  init_method: random
+  init_method: uniform
+  proj_buff_ratio: 2.0
   optimiser:
     name: nmspg
     max_iter: 1000
