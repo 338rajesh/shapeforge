@@ -2,13 +2,24 @@ num_cells: 2 # Number of unit cells to generate
 
 domain:
   shape: rectangle
-  bounds: [0, 0, 30, 20] # x_min, y_min, x_max, y_max
+  bounds: [0, 0, 30, 30] # x_min, y_min, x_max, y_max
 
 shapes:
   - name: Circle
-    vf: 0.6
+    vf: 0.7
     params:
-      radius: uniform(2, 0.5)
+      radius: uniform(1, 0.1)
+
+image:
+  domain:
+    facecolor: black
+    edgecolor: None
+  shapes:
+    facecolor: white
+    edgecolor: None
+  size: [512, 512]
+  dpi: 100
+  model: L
 
 output_dir: /home/rajesh/work/repos/shapeforge/scratch/outputs
 

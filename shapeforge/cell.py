@@ -1,5 +1,6 @@
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Sequence, Any
 
 import gbox as gb
@@ -25,7 +26,7 @@ class CellDomain:
         )
 
     @property
-    def domain_bounds(self):
+    def bounds(self):
         return self._bounds
 
     @property
@@ -48,6 +49,9 @@ class CellDomain:
         Calculate the volume of the cell domain.
         """
         return self.domain.volume
+
+    def plot(self, axs: plt.Axes, **kwargs):
+        return self.domain.plot(axs=axs, **kwargs)
 
     @classmethod
     def from_dict(cls, config: dict[str, Any]) -> "CellDomain":
@@ -345,48 +349,58 @@ class Cell:
         #
         self._opt_problem = None
 
-    def plot(self, fig=None, ax=None, show=False, f_path=None):
+    def plot(
+        self,
+        shape_vis_options: dict | None = None,
+        domain_vis_options: dict | None = None,
+        *,
+        image_size: tuple[int, int] = (256, 256),
+        f_path: Path | str | None = None,
+    ):
         """
         Plot the cell with its domain and inclusions.
 
         Parameters
         ----------
-        fig : matplotlib.figure.Figure, optional
-            The figure to plot on. If None, a new figure will be created.
         ax : matplotlib.axes.Axes, optional
             The axes to plot on. If None, a new axes will be created.
-        show : bool, optional
-            If True, display the plot. Default is False.
-        f_path : str, optional
-            If provided, save the plot to this file path.
-        kwargs : dict, optional
-            Additional keyword arguments for plotting.
+        shape_options : dict, optional
+            Keyword arguments passed to the respective shape's
+            `plot` method.
+        domain_vis_options : dict, optional
+            Keyword arguments passed to the domain's `plot` method.
         """
-        if fig is None or ax is None:
-            fig, ax = plt.subplots()
+        shape_vis_options = shape_vis_options or {}
+        domain_vis_options = domain_vis_options or {}
 
-        shape_options = dict(facecolor="white", edgecolor="None")
-        bg_options = dict(facecolor="black", edgecolor="None")
-
-        domain_bbox = self.domain.domain
-        ax = domain_bbox.plot(ax, lw=1, alpha=0.5, **bg_options)
+        shapes_plotter = gb.utils.ShapesPlotter(
+            shape_options=None,
+            bg_options={
+                **domain_vis_options,
+                "bounds": self.domain.bounds,
+            },
+            fig_options=None,
+            image_options={
+                "dpi": 100,
+                "size": image_size,
+                "mode": "L",
+                "as_array": False,
+                "dtype": "uint8",
+            }
+        )
 
         for a_group_of_inclusions in self.shapes.values():
             for a_inclusion in a_group_of_inclusions:
-                a_inclusion.plot(axs=ax, shape_options=shape_options)
+                incl_patch = a_inclusion.get_patch(**shape_vis_options)
+                shapes_plotter.add_patch(incl_patch)
 
-        # TODO replace this custom axis formatting with a dedicated function
-        ax.set_aspect("equal")
-        ax.axis("off")
-        ax.set_xlim(domain_bbox.p_min[0], domain_bbox.p_max[0])
-        ax.set_ylim(domain_bbox.p_min[1], domain_bbox.p_max[1])
-
-        if f_path is not None:
-            plt.savefig(f_path)
-
-        if show:
-            plt.show()
-        plt.close(fig)
+        shapes_plotter.saveas(f_path)
+        shapes_plotter.close()
+        # # TODO replace this custom axis formatting with a dedicated function
+        # axs.set_aspect("equal")
+        # axs.axis("off")
+        # axs.set_xlim(*self.domain.x_bounds)
+        # axs.set_ylim(*self.domain.y_bounds)
 
     def remove_inclusion_overlaps(self, ssd_ratio, proj_buffer_ratio) -> None:
         # Run Optim Loop to ensure there are no overlaps among inclusions

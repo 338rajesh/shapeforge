@@ -57,7 +57,13 @@ def generate_cell(config: dict | str | Path) -> Cell:
     print("> Cell generation completed!")
 
 
-    cell.plot(f_path=output_dir.joinpath("final.png"))
+    image_options = config.get("image", {})
+    cell.plot(
+        f_path=output_dir.joinpath("final.png"),
+        shape_vis_options=image_options.get("shapes", {}),
+        domain_vis_options=image_options.get("domain", {}),
+        image_size=image_options.get("size", (256, 256))
+    )
 
     return cell
 
