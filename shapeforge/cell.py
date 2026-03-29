@@ -1,4 +1,6 @@
 import math
+import json
+import pickle
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Any
@@ -6,6 +8,7 @@ from typing import List, Optional, Sequence, Any
 import gbox as gb
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 
 from .optim import nmspg, OptimisationProblem
 from .utils import _validate_dict, DistributionSampler
@@ -349,12 +352,87 @@ class Cell:
         #
         self._opt_problem = None
 
+    def clone(self) -> "Cell":
+        return Cell(self.domain, self.shapes)
+
+    def save(
+        self,
+        f_path: Path | str,
+        *,
+        plot_options: dict = None,
+    ) -> Path:
+        """
+
+        Parameters
+        ----------
+        f_path: str or Path
+            File path to save the cell. If not provided the cell will be saved
+            in the current directory with a default name.
+
+        plot_options: dict, optional
+            Keyword arguments passed to the plot method, it may include:
+            
+            - `shape_facecolor`
+            - `shape_edgecolor`
+            - `bg_facecolor`
+            - `bg_edgecolor`
+            - `dpi`
+            - `size`
+
+        """
+        supported_file_types = {
+            ".json",
+            ".yaml",
+            ".yml",
+            ".pickle",
+            ".pkl",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".pdf",
+        }
+
+        f_path = Path(f_path)
+        if f_path.exists():
+            raise FileExistsError(f_path)
+        if f_path.suffix == "":
+            f_path = f_path.with_suffix(".json")
+
+        if f_path.suffix not in supported_file_types:
+            raise ValueError(
+                f"Unsupported file type: {f_path.suffix}. "
+                f"Supported file types are: {supported_file_types}."
+            )
+
+        if f_path.suffix == ".json":
+            with open(f_path, "w") as f:
+                json.dump(self.to_dict(), f, indent=4)
+            return f_path
+        elif f_path.suffix in (".yaml", ".yml"):
+            with open(f_path, "w") as f:
+                yaml.dump(self.to_dict(), f)
+            return f_path
+        elif f_path.suffix in (".pickle", ".pkl"):
+            with open(f_path, "wb") as f:
+                pickle.dump(self, f)
+            return f_path
+        elif f_path.suffix in (".png", ".jpg", ".jpeg", ".pdf"):
+            self.plot(f_path=f_path, **(plot_options or {}))
+            return f_path
+        elif f_path.suffix == ".npz":
+            raise NotImplementedError()
+        else:
+            raise ValueError(f"Unsupported file type: {f_path.suffix}")
+
     def plot(
         self,
-        shape_vis_options: dict | None = None,
-        domain_vis_options: dict | None = None,
-        *,
-        image_size: tuple[int, int] = (256, 256),
+        shape_facecolor: str = "white",
+        shape_edgecolor: str = "black",
+        bg_facecolor: str = "black",
+        bg_edgecolor: str = "white",
+        size: tuple[int, int] = (256, 256),
+        dpi: int = 100,
+        as_array: bool = False,
         f_path: Path | str | None = None,
     ):
         """
@@ -370,29 +448,27 @@ class Cell:
         domain_vis_options : dict, optional
             Keyword arguments passed to the domain's `plot` method.
         """
-        shape_vis_options = shape_vis_options or {}
-        domain_vis_options = domain_vis_options or {}
-
         shapes_plotter = gb.utils.ShapesPlotter(
-            shape_options=None,
+            shape_options={
+                "facecolor": shape_facecolor,
+                "edgecolor": shape_edgecolor,
+            },
             bg_options={
-                **domain_vis_options,
+                "edgecolor": bg_edgecolor,
+                "facecolor": bg_facecolor,
                 "bounds": self.domain.bounds,
             },
-            fig_options=None,
             image_options={
-                "dpi": 100,
-                "size": image_size,
+                "dpi": dpi,
+                "size": size,
                 "mode": "L",
-                "as_array": False,
                 "dtype": "uint8",
-            }
+            },
         )
 
         for a_group_of_inclusions in self.shapes.values():
             for a_inclusion in a_group_of_inclusions:
-                incl_patch = a_inclusion.get_patch(**shape_vis_options)
-                shapes_plotter.add_patch(incl_patch)
+                shapes_plotter.add_shape(a_inclusion)
 
         shapes_plotter.saveas(f_path)
         shapes_plotter.close()

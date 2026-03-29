@@ -6,28 +6,27 @@ domain:
 
 shapes:
   - name: Circle
-    vf: 0.7
+    vf: 0.6
     params:
       radius: uniform(1, 0.1)
 
-image:
-  domain:
-    facecolor: black
-    edgecolor: None
-  shapes:
-    facecolor: white
-    edgecolor: None
-  size: [512, 512]
-  dpi: 100
-  model: L
-
-output_dir: /home/rajesh/work/repos/shapeforge/scratch/outputs
+export:
+  output_dir: /home/rajesh/work/repos/shapeforge/scratch/outputs/test_1
+  as_array: false
+  format: png # png, jpg, pdf, json, pkl, yml, npz
+  plot_with:
+    shape_facecolor: white
+    shape_edgecolor: None
+    bg_facecolor: black
+    bg_edgecolor: None
+    size: [512, 512]
+    dpi: 100
 
 packing:
   periodic: false
   min_gap: 0.05
 
-verbose: false
+verbose: 1
 rng_seed: 42
 # # ----------------------------------------------
 
