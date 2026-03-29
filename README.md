@@ -8,6 +8,17 @@ A python package for generating 2D or 3D domain containing geometry shapes of in
 pip install shapeforge
 ```
 
+## Quick Start
+
+```bash
+# In a python environment where shapeforge is installed
+shapeforge <path_to_config_file>
+
+# For example:
+shapeforge demos/config.yaml  # edit yaml file as needed
+```
+
+
 ## Cell
 
 A cell is an union of a domain and inclusions. At the moment, only rectangular
@@ -30,7 +41,7 @@ described using positional and size parameters.
 > For flowchart of events involved in cell generation, please refer to
 > [Flow of Events](docs/flow_of_events.md).
 
-## Planned features
+<!-- ## Planned features
 
 TODO udpate this list as features are implemented.
 
@@ -72,4 +83,4 @@ uv add --group dev dev-package==version
 uv run --group dev pytest tests/
 ```
 
-> Check [uv](https://docs.astral.sh/uv/)'s documentation for more details
+> Check [uv](https://docs.astral.sh/uv/)'s documentation for more details -->

@@ -11,7 +11,7 @@ shapes:
       radius: uniform(1, 0.1)
 
 export:
-  output_dir: /home/rajesh/work/repos/shapeforge/scratch/outputs/test_1
+  output_dir: ./scratch/outputs/test_1
   as_array: false
   format: png # png, jpg, pdf, json, pkl, yml, npz
   plot_with:
