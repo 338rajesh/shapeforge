@@ -15,9 +15,13 @@ pip install shapeforge
 shapeforge <path_to_config_file>
 
 # For example:
-shapeforge demos/config.yaml  # edit yaml file as needed
+shapeforge demo/config.yaml  # edit yaml file as needed
+# default outputs something as follows:
 ```
 
+| Image - 1                                        | Image - 2                                        |
+| :----------------------------------------------: | :----------------------------------------------: |
+| ![Example output of shapeforge](demo/cell_0.png) | ![Example output of shapeforge](demo/cell_1.png) |
 
 ## Cell
 
@@ -53,7 +57,6 @@ TODO udpate this list as features are implemented.
 - [ ] Yes, metrics are required, that compare generated vs requested.
 - [ ] GPU acceleration is surely in plan, but not now.
 - [ ] Yes, I am looking for scalable modules
-
 
 ## For Developers
 
