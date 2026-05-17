@@ -6,17 +6,24 @@ domain:
 
 shapes:
   - name: Circle
-    vf: 0.6
+    vf: 0.3
     params:
-      radius: uniform(1, 0.1)
+      radius: uniform(1.5, 0.1)
+
+  - name: Ellipse
+    vf: 0.3
+    params:
+      semi_major_length: uniform(2, 0.1)
+      semi_minor_length: uniform(1, 0.1)
+      major_axis_angle: uniform(0, 360)
 
 export:
-  output_dir: ./scratch/outputs/test_11
+  output_dir: ./scratch/outputs/test_12
   as_array: false
   format: png # png, jpg, pdf, json, pkl, yml, npz
   plot_with:
-    shape_facecolor: white
-    shape_edgecolor: None
+    shape_facecolor: None
+    shape_edgecolor: red
     bg_facecolor: black
     bg_edgecolor: None
     size: [512, 512]
@@ -24,7 +31,7 @@ export:
 
 packing:
   periodic: false
-  min_gap: 0.05
+  min_gap: 0.2
 
 verbose: 1
 rng_seed: 42
