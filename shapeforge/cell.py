@@ -21,33 +21,39 @@ class CellDomain:
     does not contain any by itself.
     """
 
-    def __init__(self, bounds: Sequence):
-        self._bounds = bounds
-        self.domain = gb.BoundingBox(
-            lower_bound=(bounds[0], bounds[1]),
-            upper_bound=(bounds[2], bounds[3]),
-        )
+    def __init__(self, **options):
+        self.domain: gb.GShape2D = self._get_domain(options)
+
+    def _get_domain(self, options: dict):
+        shape = options.get("shape")
+        if shape is None:
+            raise ValueError("Shape not specified.")
+        if shape == "rectangle":
+            centre = options.get("centre")
+            if centre is None:
+                print("Warning: centre not specified, using (0, 0).")
+                centre = (0.0, 0.0)
+            semi_major_length = options.get("semi_major_length")
+            semi_minor_length = options.get("semi_minor_length")
+            major_axis_angle = options.get("major_axis_angle")
+            return gb.Rectangle(
+                semi_major_length=semi_major_length,
+                semi_minor_length=semi_minor_length,
+                major_axis_angle=major_axis_angle,
+                centre=centre,
+            )
+        else:
+            raise NotImplementedError(f"Shape {shape} not implemented.")
 
     @property
-    def bounds(self):
-        return self._bounds
+    def bounds(self) -> list[float]:
+        _bounds = getattr(self.domain, "bounds", None)
+        if _bounds is None:
+            raise ValueError("Bounds not set.")
+        return list(_bounds)
 
     @property
-    def x_bounds(self) -> tuple[float, float]:
-        """
-        Get the x bounds of the cell domain.
-        """
-        return self._bounds[0], self._bounds[2]
-
-    @property
-    def y_bounds(self) -> tuple[float, float]:
-        """
-        Get the y bounds of the cell domain.
-        """
-        return self._bounds[1], self._bounds[3]
-
-    @property
-    def cell_volume(self) -> float:
+    def volume(self) -> float:
         """
         Calculate the volume of the cell domain.
         """
@@ -59,59 +65,68 @@ class CellDomain:
     @classmethod
     def from_dict(cls, config: dict[str, Any]) -> "CellDomain":
         """
-        Create a CellDomain instance from a dictionary, with the following
-        structure:
-
-        ```py
-        # dict(shape=<name>, bounds=[x_min, y_min, x_max, y_max])
-        domain_config = dict(shape=rectangle, bounds=[0, 0, 20, 25])
-        ```
-
-        Returns
-        -------
-        CellDomain
-            An instance of CellDomain initialized with the provided bounds.
+        Create a cell domain from a dictionary.
         """
-        _validate_dict(config, ["shape", "bounds"])
-        cell_shape = config["shape"]
-        cell_bounds = config["bounds"]
+        return cls(**config)
 
-        if cell_shape != "rectangle":
-            raise NotImplementedError(
-                f"Unsupported cell shape '{cell_shape}'. Only 'rectangle' is supported."
-            )
-        x_min, y_min, x_max, y_max = cell_bounds
 
-        if x_min >= x_max or y_min >= y_max:
-            raise ValueError(
-                "Invalid bounds: x_min must be less than x_max and "
-                "y_min must be less than y_max."
-            )
+@dataclass
+class CellElement:
+    name: str
+    element: gb.GShape
 
-        return cls(bounds=[x_min, y_min, x_max, y_max])
+    def __post_init__(self):
+        if not isinstance(self.element, gb.GShape):
+            raise ValueError(f"Element {self.element} is not a GShape.")
+
+    def initialise(self, domain: CellDomain):
+        pass
 
 
 class Cell:
     def __init__(
         self,
         domain: CellDomain,
-        shapes: dict[str, List[gb.GShape]] = None,
+        elements: Sequence[CellElement] = None,
     ):
         self.domain = domain
-        self.shapes = shapes
+        self.elements = elements
         #
         self._opt_problem = None
 
     def clone(self) -> "Cell":
-        return Cell(self.domain, self.shapes)
+        return Cell(self.domain, self.elements)
 
-    def save(
-        self,
-        f_path: Path | str,
-        *,
-        plot_options: dict = None,
-    ) -> Path:
+    @classmethod
+    def initialise(cls, cell_config: dict, rng_seed, init_method="uniform"):
+        cell_domain = CellDomain.from_dict(cell_config["domain"])
+        elements = cell_config.get("elements", [])
+        if len(elements) == 0:
+            print(
+                "WARNING: no elements are found in the cell config, so returning "
+                "empty cell domain."
+            )
+            return Cell(cell_domain)  # just return the empty cell domain
+
+        elements = initialise_elements(
+            elements,
+            cell_domain,
+            rng=np.random.default_rng(seed=rng_seed),
+            init_method=init_method,
+        )
+
+        return cls(cell_domain, elements)
+
+    def to_dict(self) -> dict[str, Any]:
+        raise NotImplementedError()
+
+    def from_dict(config: dict[str, Any]) -> "Cell":
+        raise NotImplementedError()
+
+    def save(self, f_path: Path | str) -> Path:
         """
+        Save the cell config to a file, for creating the same cell later
+        using the `load` method.
 
         Parameters
         ----------
@@ -119,70 +134,54 @@ class Cell:
             File path to save the cell. If not provided the cell will be saved
             in the current directory with a default name.
 
-        plot_options: dict, optional
-            Keyword arguments passed to the plot method, it may include:
-
-            - `shape_facecolor`
-            - `shape_edgecolor`
-            - `bg_facecolor`
-            - `bg_edgecolor`
-            - `dpi`
-            - `size`
-
         """
-        supported_file_types = {
-            ".json",
-            ".yaml",
-            ".yml",
-            ".pickle",
-            ".pkl",
-            ".png",
-            ".jpg",
-            ".jpeg",
-            ".pdf",
-        }
-
         f_path = Path(f_path)
         if f_path.exists():
             raise FileExistsError(f_path)
         if f_path.suffix == "":
             f_path = f_path.with_suffix(".json")
 
-        if f_path.suffix not in supported_file_types:
+        if f_path.suffix != ".json":
             raise ValueError(
                 f"Unsupported file type: {f_path.suffix}. "
-                f"Supported file types are: {supported_file_types}."
+                f"Only .json files are supported."
             )
+        with open(f_path, "w") as f:
+            json.dump(self.to_dict(), f, indent=4)
 
-        if f_path.suffix == ".json":
-            with open(f_path, "w") as f:
-                json.dump(self.to_dict(), f, indent=4)
-            return f_path
-        elif f_path.suffix in (".yaml", ".yml"):
-            with open(f_path, "w") as f:
-                yaml.dump(self.to_dict(), f)
-            return f_path
-        elif f_path.suffix in (".pickle", ".pkl"):
+    def load(f_path: Path | str) -> "Cell":
+        with open(f_path, "r") as f:
+            config = json.load(f)
+        return Cell.from_dict(config)
+
+    def export(self, f_path: Path | str, options: dict):
+        f_path = Path(f_path)
+        f_suffix = f_path.suffix.lower()
+        if f_suffix in (".pickle", ".pkl"):
             with open(f_path, "wb") as f:
                 pickle.dump(self, f)
-            return f_path
-        elif f_path.suffix in (".png", ".jpg", ".jpeg", ".pdf"):
-            self.plot(f_path=f_path, **(plot_options or {}))
-            return f_path
-        elif f_path.suffix == ".npz":
-            raise NotImplementedError()
+        elif f_suffix in (".yaml", ".yml"):
+            with open(f_path, "w") as f:
+                yaml.dump(self.to_dict(), f)
+        elif f_suffix == ".json":
+            with open(f_path, "w") as f:
+                json.dump(self.to_dict(), f, indent=4)
+        elif f_suffix == ".npz":
+            with open(f_path, "wb") as f:
+                np.savez(f, **self.to_dict())
+        elif f_suffix == ".png":
+            self._plot(f_path=f_path, **options)
         else:
-            raise ValueError(f"Unsupported file type: {f_path.suffix}")
+            raise ValueError(f"Unsupported file type: {f_suffix}.")
 
-    def plot(
+    def _plot(
         self,
-        shape_facecolor: str = "white",
-        shape_edgecolor: str = "black",
+        element_facecolor: str = "white",
+        element_edgecolor: str = "black",
         bg_facecolor: str = "black",
         bg_edgecolor: str = "white",
         size: tuple[int, int] = (256, 256),
         dpi: int = 100,
-        as_array: bool = False,
         f_path: Path | str | None = None,
     ):
         """
@@ -200,8 +199,8 @@ class Cell:
         """
         shapes_plotter = gb.utils.ShapesPlotter(
             shape_options={
-                "facecolor": shape_facecolor,
-                "edgecolor": shape_edgecolor,
+                "facecolor": element_facecolor,
+                "edgecolor": element_edgecolor,
             },
             bg_options={
                 "edgecolor": bg_edgecolor,
@@ -216,17 +215,12 @@ class Cell:
             },
         )
 
-        for a_group_of_inclusions in self.shapes.values():
+        for a_group_of_inclusions in self.elements.values():
             for a_inclusion in a_group_of_inclusions:
                 shapes_plotter.add_shape(a_inclusion)
 
         shapes_plotter.saveas(f_path)
         shapes_plotter.close()
-        # # TODO replace this custom axis formatting with a dedicated function
-        # axs.set_aspect("equal")
-        # axs.axis("off")
-        # axs.set_xlim(*self.domain.x_bounds)
-        # axs.set_ylim(*self.domain.y_bounds)
 
     def remove_inclusion_overlaps(self, ssd_ratio, proj_buffer_ratio) -> None:
         # Run Optim Loop to ensure there are no overlaps among inclusions
@@ -239,7 +233,7 @@ class Cell:
         #   If converged, return the optimised inclusions positions
         self._opt_problem = GShapes2DOverlap(
             domain=self.domain,
-            shapes=self.shapes,
+            shapes=self.elements,
             ssd_ratio=ssd_ratio,
             proj_buffer_ratio=proj_buffer_ratio,
         )
@@ -259,7 +253,7 @@ class Cell:
         )
 
         positions = result.x_optimal.reshape(-1, 2, order="F")
-        for k, shapes_list in self.shapes.items():
+        for k, shapes_list in self.elements.items():
             for idx, a_shape in enumerate(shapes_list):
                 a_shape.centre = positions[idx, 0:2]
 
@@ -328,7 +322,7 @@ class InclusionSampler:
         )
 
 
-def initialise_shapes(
+def initialise_elements(
     shapes_params: dict | list[dict],
     cell_domain: CellDomain,
     *,
@@ -371,8 +365,7 @@ def initialise_shapes(
         )
 
     # xc and yc distributions are not specified in the config,
-    x_min, x_max = cell_domain.x_bounds
-    y_min, y_max = cell_domain.y_bounds
+    x_min, x_max, y_min, y_max = cell_domain.bounds
     if init_method != "uniform":
         raise NotImplementedError(
             f"Init method {init_method} for inclusions is not supported."
@@ -416,7 +409,7 @@ def initialise_shapes(
             pos_sampler=pos_sampler,
             size_samplers=size_samplers,
         )
-        required_volume = cell_domain.cell_volume * vf
+        required_volume = cell_domain.volume * vf
         cumulative_volume = 0.0
         generated_inclusions = []
         while cumulative_volume < required_volume:

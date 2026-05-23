@@ -3,9 +3,6 @@ import json
 import shutil
 from pathlib import Path
 
-import numpy as np
-
-from .cell import CellDomain, initialise_shapes
 from .cell import Cell
 from .utils import load_yaml, Event
 
@@ -13,37 +10,21 @@ from .utils import load_yaml, Event
 def _generate_cell(
     cfg: dict, get_init_cell: bool = False, log_handle: Event = None
 ) -> Cell | tuple[Cell, Cell]:
+    cell_cfg = cfg["cell"]
     # --------------------------------------------------------- #
     #               Cell Initialization                         #
     # --------------------------------------------------------- #
-    cell_domain = CellDomain.from_dict(cfg["domain"])
-    if log_handle is not None:
-        log_handle.log("Initializing the domain...")
-    shapes = cfg.get("shapes", [])
-    if len(shapes) == 0:
-        print(
-            "WARNING: no shapes are found in the config, so returning "
-            "empty cell domain."
-        )
-        return Cell(cell_domain)  # just return the empty cell domain
-
-    shapes = initialise_shapes(
-        shapes,
-        cell_domain,
-        rng=np.random.default_rng(seed=cfg.get("rng_seed")),
-        init_method=cfg.get("engine", {}).get("init_method", "uniform"),
+    cell = Cell.initialise(
+        cell_cfg, cfg["rng_seed"], init_method=cfg["engine"]["init_method"]
     )
-    if log_handle is not None:
-        log_handle.log("Shapes are initialised in the domain.")
-    cell = Cell(cell_domain, shapes)
     init_cell_copy = cell.clone()
 
     # --------------------------------------------------------- #
     #               Cell Optimisation                           #
     # --------------------------------------------------------- #
     cell.remove_inclusion_overlaps(
-        ssd_ratio=cfg.get("min_gap", 0.05),
-        proj_buffer_ratio=cfg.get("proj_buffer_ratio", 0.5),
+        ssd_ratio=cell_cfg.get("element_min_gap", 0.05),
+        proj_buffer_ratio=cfg.get("engine", {}).get("proj_buffer_ratio", 0.5),
     )
     if log_handle is not None:
         log_handle.log("Inclusions overlaps are removed.")
@@ -77,7 +58,10 @@ def _load_input_file(config: Path):
         if rm_output_dir.lower() == "y":
             shutil.rmtree(output_dir)
     output_dir.mkdir(exist_ok=True, parents=True)
-    return config, verbose, output_dir, export_options
+    export_options["output_dir"] = output_dir
+    config["export"] = export_options
+    config["verbose"] = verbose
+    return config
 
 
 def _validate_num_cells(num_cells):
@@ -95,24 +79,39 @@ def generate_cell(config: dict | str | Path) -> Cell:
     Event.log("Starting the cell(s) genration...")
 
     with Event("Loading the input file..."):
-        config, verbose, output_dir, export_options = _load_input_file(config)
-    export_fmt = export_options.get("format", "png")
+        config = _load_input_file(config)
 
-    if verbose > 10:
+    if config["verbose"] > 10:
         Event.log("Generating the cell with configuration:")
         Event.log(json.dumps(config, indent=4))
+
+    def get_file_path(idx: int):
+        return config["export"]["output_dir"].joinpath(
+            f"cell_{idx}.{config['export']['format']}"
+        )
 
     num_cells = _validate_num_cells(config.get("num_cells", 1))
     for i in range(num_cells):
         config["rng_seed"] = config["rng_seed"] + i
+        Event.log(f"Generating cell {i} with seed {config['rng_seed']}...")
 
-        with Event(f"Generating cell {i} with seed {config['rng_seed']}...") as lh:
-            cell = _generate_cell(config, get_init_cell=False, log_handle=lh)
+        # f"Generating cell {i} with seed {config['rng_seed']}..."
+        with Event("Initializing the cell..."):
+            cell = Cell.initialise(
+                config["cell"], config["rng_seed"], init_method="uniform"
+            )
+
+        with Event("Removing inclusions overlaps..."):
+            cell.remove_inclusion_overlaps(
+                ssd_ratio=config["cell"].get("element_min_gap", 0.05),
+                proj_buffer_ratio=config.get("engine", {}).get(
+                    "proj_buffer_ratio", 0.5
+                ),
+            )
 
         with Event(f"Exporting cell {i}..."):
-            cell.save(
-                f_path=output_dir.joinpath(f"cell_{i}.{export_fmt}"),
-                plot_options=export_options.get("plot_with"),
+            cell.export(
+                f_path=get_file_path(i), options=config["export"]["options"]
             )
     Event.log("Completed cell generation.")
 

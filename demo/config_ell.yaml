@@ -1,41 +1,41 @@
+verbose: 1
+rng_seed: 42
 num_cells: 2 # Number of unit cells to generate
+cell:
+  element_periodicity: false
+  element_min_gap: 0.05 # times sum of their equivalent radii
+  domain:
+    shape: rectangle
+    centre: [0, 0]
+    semi_major_length: 20
+    semi_minor_length: 25
+    major_axis_angle: 0
 
-domain:
-  shape: rectangle
-  bounds: [0, 0, 30, 30] # x_min, y_min, x_max, y_max
+  elements:
+    - name: Circle
+      vf: 0.3
+      params:
+        radius: uniform(1.5, 0.1)
 
-shapes:
-  - name: Circle
-    vf: 0.3
-    params:
-      radius: uniform(1.5, 0.1)
-
-  - name: Ellipse
-    vf: 0.3
-    params:
-      semi_major_length: uniform(2, 0.1)
-      semi_minor_length: uniform(1, 0.1)
-      major_axis_angle: uniform(0, 360)
+    - name: Ellipse
+      vf: 0.3
+      params:
+        semi_major_length: uniform(2, 0.1)
+        semi_minor_length: uniform(1, 0.1)
+        major_axis_angle: uniform(0, 360)
 
 export:
   output_dir: ./scratch/outputs/test_12
-  as_array: false
   format: png # png, jpg, pdf, json, pkl, yml, npz
-  plot_with:
-    shape_facecolor: None
-    shape_edgecolor: red
-    bg_facecolor: black
-    bg_edgecolor: None
+  options:  # change according to format
+    element_facecolor: None
+    element_edgecolor: red
+    domain_facecolor: black
+    domain_edgecolor: None
     size: [512, 512]
     dpi: 100
 
-packing:
-  periodic: false
-  min_gap: 0.2
-
-verbose: 1
-rng_seed: 42
-# # ----------------------------------------------
+# ----------------------------------------------
 
 engine:
   init_method: uniform
