@@ -3,7 +3,7 @@ import json
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence, Any
+from typing import Sequence, Any
 
 import gbox as gb
 import matplotlib.pyplot as plt
@@ -12,6 +12,60 @@ import yaml
 
 from .optim import nmspg, OptimisationProblem
 from .utils import _validate_dict, DistributionSampler
+
+
+@dataclass
+class PositionSampler:
+    xc_sampler: DistributionSampler
+    yc_sampler: DistributionSampler
+    zc_sampler: DistributionSampler = None
+    azimuthal_angle_sampler: DistributionSampler = None
+    polar_angle_sampler: DistributionSampler = None
+
+    def sample(self) -> dict[str, float]:
+        """
+        Sample the position of the inclusion in the cell
+
+        Returns
+        -------
+        dict[str, float]
+            A dictionary containing the sampled position of the inclusion
+            in the cell. The keys are "xc", "yc", "zc", "major_axis_angle",
+            and "polar_angle".
+        """
+        out = dict(
+            xc=self.xc_sampler.sample(),
+            yc=self.yc_sampler.sample(),
+        )
+        if self.zc_sampler is not None:
+            out["zc"] = self.zc_sampler.sample()
+        if self.azimuthal_angle_sampler is not None:
+            out["major_axis_angle"] = self.azimuthal_angle_sampler.sample()
+        if self.polar_angle_sampler is not None:
+            out["polar_angle"] = self.polar_angle_sampler.sample()
+
+        return out
+
+    @classmethod
+    def from_signatures(
+        cls, x_min, x_max, y_min, y_max, init_method, rng
+    ) -> "PositionSampler":
+        if init_method != "uniform":
+            raise NotImplementedError(
+                f"Init method {init_method} is not supported for "
+                "position sampling of elements."
+            )
+        return cls(
+            xc_sampler=DistributionSampler.from_signature(
+                f"{init_method}({x_min}, {x_max - x_min})", rng=rng
+            ),
+            yc_sampler=DistributionSampler.from_signature(
+                f"{init_method}({y_min}, {y_max - y_min})", rng=rng
+            ),
+            azimuthal_angle_sampler=DistributionSampler.from_signature(
+                f"{init_method}(0.0, 360.0)", rng=rng
+            ),
+        )
 
 
 class CellDomain:
@@ -79,11 +133,27 @@ class CellElement:
         if not isinstance(self.element, gb.GShape):
             raise ValueError(f"Element {self.element} is not a GShape.")
 
+    @property
+    def volume(self):
+        return self.element.volume
+
     def sample(self, domain: CellDomain):
         pass
 
     @classmethod
-    def initialise(cls, domain: CellDomain, elements_config: dict):
+    def initialise(
+        cls,
+        domain: CellDomain,
+        elements_config: dict,
+        *,
+        init_method="uniform",
+        rng=None,
+    ):
+        x_min, y_min, x_max, y_max = domain.bounds
+        pos_sampler = PositionSampler.from_signatures(
+            x_min, x_max, y_min, y_max, init_method="uniform", rng=rng
+        )
+
         elements: list[CellElement] = []
         cum_vf = 0.0
         for ith_ele_config in elements_config:
@@ -104,16 +174,29 @@ class CellElement:
                 p_name: DistributionSampler.from_signature(sig, rng=rng)
                 for p_name, sig in size_sampler_sigs.items()
             }
+
+            g_element = getattr(gb, name, None)
+            if not callable(getattr(g_element, "from_params")):
+                raise ValueError(
+                    f"Element name '{name}' is not valid."
+                    f"It must contain a method 'from_params'."
+                )
+
             required_volume = domain.volume * vf
             cumulative_volume = 0.0
             generated_elements = []
             while cumulative_volume < required_volume:
-                a_element = cls.sample()
+                pos_params = pos_sampler.sample()
+                size_params = {k: v.sample() for k, v in size_samplers.items()}
+                g_element = g_element.from_params(
+                    positional_params=pos_params, size_params=size_params
+                )
+                a_element = cls(name=name, element=g_element)
                 generated_elements.append(a_element)
                 cumulative_volume += a_element.volume
 
             elements.extend(generated_elements)
-        
+
         return elements
 
 
@@ -132,7 +215,12 @@ class Cell:
         return Cell(self.domain, self.elements)
 
     @classmethod
-    def initialise(cls, cell_config: dict, rng_seed, init_method="uniform"):
+    def initialise(
+        cls,
+        cell_config: dict,
+        rng_seed,
+        init_method="uniform",
+    ):
         cell_domain = CellDomain.from_dict(cell_config["domain"])
 
         elements = cell_config.get("elements", [])
@@ -143,13 +231,12 @@ class Cell:
             )
             return Cell(cell_domain)  # just return the empty cell domain
 
-        elements = initialise_elements(
-            elements,
+        elements = CellElement.initialise(
             cell_domain,
+            elements,
             rng=np.random.default_rng(seed=rng_seed),
             init_method=init_method,
         )
-
         return cls(cell_domain, elements)
 
     def to_dict(self) -> dict[str, Any]:
@@ -213,8 +300,8 @@ class Cell:
         self,
         element_facecolor: str = "white",
         element_edgecolor: str = "black",
-        bg_facecolor: str = "black",
-        bg_edgecolor: str = "white",
+        domain_facecolor: str = "black",
+        domain_edgecolor: str = "white",
         size: tuple[int, int] = (256, 256),
         dpi: int = 100,
         f_path: Path | str | None = None,
@@ -238,8 +325,8 @@ class Cell:
                 "edgecolor": element_edgecolor,
             },
             bg_options={
-                "edgecolor": bg_edgecolor,
-                "facecolor": bg_facecolor,
+                "edgecolor": domain_edgecolor,
+                "facecolor": domain_facecolor,
                 "bounds": self.domain.bounds,
             },
             image_options={
@@ -250,9 +337,8 @@ class Cell:
             },
         )
 
-        for a_group_of_inclusions in self.elements.values():
-            for a_inclusion in a_group_of_inclusions:
-                shapes_plotter.add_shape(a_inclusion)
+        for a_element in self.elements:
+            shapes_plotter.add_shape(a_element.element)
 
         shapes_plotter.saveas(f_path)
         shapes_plotter.close()
@@ -266,9 +352,10 @@ class Cell:
         #   Update the inclusions positions
         #   Check for convergence
         #   If converged, return the optimised inclusions positions
-        self._opt_problem = GShapes2DOverlap(
+        # self._opt_problem = GShapes2DOverlap(
+        self._opt_problem = CellCirclesOverlap(
             domain=self.domain,
-            shapes=self.elements,
+            elements=self.elements,
             ssd_ratio=ssd_ratio,
             proj_buffer_ratio=proj_buffer_ratio,
         )
@@ -288,172 +375,10 @@ class Cell:
         )
 
         positions = result.x_optimal.reshape(-1, 2, order="F")
-        for k, shapes_list in self.elements.items():
-            for idx, a_shape in enumerate(shapes_list):
-                a_shape.centre = positions[idx, 0:2]
-
-
-@dataclass
-class PositionSampler:
-    xc_sampler: DistributionSampler
-    yc_sampler: DistributionSampler
-    zc_sampler: DistributionSampler = None
-    azimuthal_angle_sampler: DistributionSampler = None
-    polar_angle_sampler: DistributionSampler = None
-
-    def sample(self) -> dict[str, float]:
-        """
-        Sample the position of the inclusion in the cell
-
-        Returns
-        -------
-        dict[str, float]
-            A dictionary containing the sampled position of the inclusion
-            in the cell. The keys are "xc", "yc", "zc", "major_axis_angle",
-            and "polar_angle".
-        """
-        out = dict(
-            xc=self.xc_sampler.sample(),
-            yc=self.yc_sampler.sample(),
-        )
-        if self.zc_sampler is not None:
-            out["zc"] = self.zc_sampler.sample()
-        if self.azimuthal_angle_sampler is not None:
-            out["major_axis_angle"] = self.azimuthal_angle_sampler.sample()
-        if self.polar_angle_sampler is not None:
-            out["polar_angle"] = self.polar_angle_sampler.sample()
-
-        return out
-
-
-class InclusionSampler:
-    def __init__(
-        self,
-        shape: str | gb.GShape,
-        pos_sampler: PositionSampler,
-        size_samplers: dict[str, DistributionSampler],
-    ):
-        g_shape = getattr(gb, shape) if isinstance(shape, str) else shape
-
-        if not issubclass(g_shape, gb.GShape):
-            raise ValueError(
-                f"Unsupported shape: {shape}, must be a subclass of gb.GShape"
-            )
-        # check if g_shape has a method called from_params
-        if not callable(getattr(g_shape, "from_params")):
-            raise ValueError(
-                f"Unsupported shape: {shape}, must have a from_params method"
-            )
-
-        self.shape: gb.GShape = g_shape
-        self.pos_sampler: PositionSampler = pos_sampler
-        self.size_samplers = size_samplers
-
-    def sample(self) -> gb.GShape:
-        pos_params = self.pos_sampler.sample()
-        size_params = {k: v.sample() for k, v in self.size_samplers.items()}
-        return self.shape.from_params(
-            positional_params=pos_params, size_params=size_params
-        )
-
-
-def initialise_elements(
-    shapes_params: dict | list[dict],
-    cell_domain: CellDomain,
-    *,
-    init_method: str = "uniform",
-    rng: Optional[np.random.Generator] = None,
-) -> dict[str, List[gb.GShape]]:
-    """
-    It is the main function to initialize inclusions based on the provided
-    configuration. It iterates through the configuration list, extracting
-    the shape, volume fraction, and parameters for each inclusion type.
-    It then calls the appropriate function to generate and initialize the
-    inclusions based on the shape specified in the configuration.
-
-    Parameters
-    ----------
-    cell_domain : CellDomain
-        The cell domain in which the inclusions will be placed.
-    config : list[dict] | dict
-        A single dictionary or a list of dictionaries, each containing
-        configuration for a specific inclusion type. Each dictionary should
-        have the following keys:
-        - `name`: The shape of the inclusion (e.g., "circle", "ellipse").
-        - `vf`: The volume fraction of the inclusion.
-        - `params`: Additional parameters specific to the inclusion shape.
-
-    Returns
-    -------
-    dict[str, list[gb.GShape]]
-        A dictionary where the keys are the shape names and the values are
-        lists of initialized inclusion objects of that shape.
-    """
-    if isinstance(shapes_params, dict):
-        shapes_params = [shapes_params]
-
-    non_dict_items = [nd for nd in shapes_params if not isinstance(nd, dict)]
-    if non_dict_items:
-        raise TypeError(
-            "Configuration must be a single dictionary or a list of "
-            f"dictionaries. Found non-dictionary items: {non_dict_items}."
-        )
-
-    # xc and yc distributions are not specified in the config,
-    x_min, x_max, y_min, y_max = cell_domain.bounds
-    if init_method != "uniform":
-        raise NotImplementedError(
-            f"Init method {init_method} for inclusions is not supported."
-        )
-    pos_sampler = PositionSampler(
-        xc_sampler=DistributionSampler.from_signature(
-            f"{init_method}({x_min}, {x_max - x_min})", rng=rng
-        ),
-        yc_sampler=DistributionSampler.from_signature(
-            f"{init_method}({y_min}, {y_max - y_min})", rng=rng
-        ),
-        azimuthal_angle_sampler=DistributionSampler.from_signature(
-            f"{init_method}(0.0, 360.0)", rng=rng
-        ),
-    )
-
-    initialised_inclusions: dict[str, List[gb.GShape]] = {}
-    cum_vf = 0.0
-    for ith_incl_config in shapes_params:
-        name, vf, size_sampler_sigs = _validate_dict(
-            ith_incl_config,
-            keys=["name", "vf", "params"],
-            val_types=[str, float, dict],
-            val_ranges=[None, (0.0, 1.0), None],
-            ret_val=True,
-        )
-        cum_vf += vf
-        if cum_vf > 1.0:
-            raise ValueError(
-                "Cumulative volume fraction of given shapes exceeds 1.0."
-            )
-        size_samplers = {
-            p_name: DistributionSampler.from_signature(sig, rng=rng)
-            for p_name, sig in size_sampler_sigs.items()
-        }
-
-        # xy_sampler independent of shape
-        # params: dependent of shape
-        incl_sampler = InclusionSampler(
-            shape=name,
-            pos_sampler=pos_sampler,
-            size_samplers=size_samplers,
-        )
-        required_volume = cell_domain.volume * vf
-        cumulative_volume = 0.0
-        generated_inclusions = []
-        while cumulative_volume < required_volume:
-            a_inclusion = incl_sampler.sample()
-            generated_inclusions.append(a_inclusion)
-            cumulative_volume += a_inclusion.volume
-
-        initialised_inclusions[name] = generated_inclusions
-    return initialised_inclusions
+        for idx, a_element in enumerate(self.elements):
+            a_element.element.centre = positions[idx, 0:2]
+            # for idx, a_shape in enumerate(shapes_list):
+            #     a_shape.centre = positions[idx, 0:2]
 
 
 class CellCirclesOverlap(OptimisationProblem):
@@ -476,24 +401,24 @@ class CellCirclesOverlap(OptimisationProblem):
     def __init__(
         self,
         domain: CellDomain,
-        shapes: dict[str, list[gb.Circle]],
+        # shapes: dict[str, list[gb.Circle]],
+        elements: Sequence[CellElement],
         *,
         ssd_ratio: float = 0.05,
         proj_buffer_ratio: float = 2.0,
     ):
         super().__init__()
         self.domain = domain
-        self.shapes = shapes
 
-        self._inclusions: list[gb.Circle] = []
-        for g in shapes.values():
-            self._inclusions.extend(g)
-        self._num_inclusions = len(self._inclusions)
+        # self._inclusions: list[gb.Circle] = []
+        # for g in shapes.values():
+        #     self._inclusions.extend(g)
+        self._num_inclusions = len(elements)
 
-        self.x0 = [i.centre.x for i in self._inclusions] + [
-            i.centre.y for i in self._inclusions
+        self.x0 = [i.element.centre.x for i in elements] + [
+            i.element.centre.y for i in elements
         ]
-        self._radii = np.array([i.radius for i in self._inclusions])
+        self._radii = np.array([i.element.radius for i in elements])
         self._ssd = ssd_ratio * self._radii
         self._proj_buffer = proj_buffer_ratio * self._radii
 
@@ -536,8 +461,7 @@ class CellCirclesOverlap(OptimisationProblem):
 
     def projection(self, x: np.ndarray) -> np.ndarray:
         positions = x.reshape(-1, 2, order="F")
-        xlb, xub = self.domain.x_bounds
-        ylb, yub = self.domain.y_bounds
+        xlb, ylb, xub, yub = self.domain.bounds
 
         for i in range(self._num_inclusions):
             buf_len = self._proj_buffer[i] * np.random.random()
@@ -555,102 +479,102 @@ class CellCirclesOverlap(OptimisationProblem):
         return positions.flatten(order="F")
 
 
-class GShapes2DOverlap(OptimisationProblem):
-    """
-    Cumulative overlap cost of various `gbox.GShape2D` shapes
+# class GShapes2DOverlap(OptimisationProblem):
+#     """
+#     Cumulative overlap cost of various `gbox.GShape2D` shapes
 
-    Parameters
-    ----------
-    domain : CellDomain
-    shapes : dict[str, list[gb.GShape2D]]
-        Output of ``initialise_shapes``; all shapes must be circles.
-    ssd_ratio : float
-        Minimum surface-to-surface gap as a fraction of each circle's
-        radius.  Default 0.04 (4 %).
-    proj_buffer_ratio : float
-        Projection buffer thickness = proj_buffer_ratio x radius.
-        Default 2.0 (mirrors Julia default).
-    """
+#     Parameters
+#     ----------
+#     domain : CellDomain
+#     shapes : dict[str, list[gb.GShape2D]]
+#         Output of ``initialise_shapes``; all shapes must be circles.
+#     ssd_ratio : float
+#         Minimum surface-to-surface gap as a fraction of each circle's
+#         radius.  Default 0.04 (4 %).
+#     proj_buffer_ratio : float
+#         Projection buffer thickness = proj_buffer_ratio x radius.
+#         Default 2.0 (mirrors Julia default).
+#     """
 
-    def __init__(
-        self,
-        domain: CellDomain,
-        shapes: dict[str, list[gb.GShape2D]],
-        *,
-        ssd_ratio: float = 0.05,
-        proj_buffer_ratio: float = 2.0,
-    ):
-        super().__init__()
-        self.domain = domain
-        self.shapes = shapes
+#     def __init__(
+#         self,
+#         domain: CellDomain,
+#         shapes: dict[str, list[gb.GShape2D]],
+#         *,
+#         ssd_ratio: float = 0.05,
+#         proj_buffer_ratio: float = 2.0,
+#     ):
+#         super().__init__()
+#         self.domain = domain
+#         self.shapes = shapes
 
-        self._inclusions: list[gb.GShape2D] = []
-        for g in shapes.values():
-            self._inclusions.extend(g)
-        self._num_inclusions = len(self._inclusions)
+#         self._inclusions: list[gb.GShape2D] = []
+#         for g in shapes.values():
+#             self._inclusions.extend(g)
+#         self._num_inclusions = len(self._inclusions)
 
-        self.x0 = (
-            [i.centre.x for i in self._inclusions]
-            + [i.centre.y for i in self._inclusions]
-            + [i.major_axis_angle for i in self._inclusions]
-        )
-        self._radii = np.array([i.radius for i in self._inclusions])
-        self._ssd = ssd_ratio * self._radii
-        self._proj_buffer = proj_buffer_ratio * self._radii
+#         self.x0 = (
+#             [i.centre.x for i in self._inclusions]
+#             + [i.centre.y for i in self._inclusions]
+#             + [i.major_axis_angle for i in self._inclusions]
+#         )
+#         self._radii = np.array([i.radius for i in self._inclusions])
+#         self._ssd = ssd_ratio * self._radii
+#         self._proj_buffer = proj_buffer_ratio * self._radii
 
-    def _overlap_cost_and_gradient(self, positions: np.ndarray):
-        xs, ys = positions.T
+#     def _overlap_cost_and_gradient(self, positions: np.ndarray):
+#         xs, ys = positions.T
 
-        cost = 0.0
-        grad_x = np.zeros(self._num_inclusions)
-        grad_y = np.zeros(self._num_inclusions)
+#         cost = 0.0
+#         grad_x = np.zeros(self._num_inclusions)
+#         grad_y = np.zeros(self._num_inclusions)
 
-        for i in range(self._num_inclusions):
-            for j in range(1 + i, self._num_inclusions):
-                dx = xs[i] - xs[j]
-                dy = ys[i] - ys[j]
-                dist = math.hypot(dx, dy)
+#         for i in range(self._num_inclusions):
+#             for j in range(1 + i, self._num_inclusions):
+#                 dx = xs[i] - xs[j]
+#                 dy = ys[i] - ys[j]
+#                 dist = math.hypot(dx, dy)
 
-                dca = self._radii[i] + self._radii[j] + self._ssd[i]
-                c = dca - dist
+#                 dca = self._radii[i] + self._radii[j] + self._ssd[i]
+#                 c = dca - dist
 
-                if c > 0.0:
-                    dol = c / (dist + 1e-6)  # degree of overlap
+#                 if c > 0.0:
+#                     dol = c / (dist + 1e-6)  # degree of overlap
 
-                    cost += c * c  # making convex
+#                     cost += c * c  # making convex
 
-                    tmp_gx = dol * dx
-                    tmp_gy = dol * dy
-                    grad_x[i] += tmp_gx
-                    grad_x[j] -= tmp_gx
-                    grad_y[i] += tmp_gy
-                    grad_y[j] -= tmp_gy
+#                     tmp_gx = dol * dx
+#                     tmp_gy = dol * dy
+#                     grad_x[i] += tmp_gx
+#                     grad_x[j] -= tmp_gx
+#                     grad_y[i] += tmp_gy
+#                     grad_y[j] -= tmp_gy
 
-        grad = -2.0 * np.column_stack([grad_x, grad_y])
-        return cost, grad
+#         grad = -2.0 * np.column_stack([grad_x, grad_y])
+#         return cost, grad
 
-    def f_and_grad(self, x: np.ndarray) -> tuple[float, np.ndarray]:
-        positions = x.reshape(-1, 2, order="F")  # x, y
-        f, g = self._overlap_cost_and_gradient(positions)
-        self.eval_count["f_and_g"] += 1
-        return f, g.flatten(order="F")
+#     def f_and_grad(self, x: np.ndarray) -> tuple[float, np.ndarray]:
+#         positions = x.reshape(-1, 2, order="F")  # x, y
+#         f, g = self._overlap_cost_and_gradient(positions)
+#         self.eval_count["f_and_g"] += 1
+#         return f, g.flatten(order="F")
 
-    def projection(self, x: np.ndarray) -> np.ndarray:
-        positions = x.reshape(-1, 2, order="F")
-        xlb, xub = self.domain.x_bounds
-        ylb, yub = self.domain.y_bounds
+#     def projection(self, x: np.ndarray) -> np.ndarray:
+#         positions = x.reshape(-1, 2, order="F")
+#         xlb, xub = self.domain.x_bounds
+#         ylb, yub = self.domain.y_bounds
 
-        for i in range(self._num_inclusions):
-            buf_len = self._proj_buffer[i] * np.random.random()
-            if positions[i, 0] > xub:
-                positions[i, 0] = xub - buf_len
-            elif positions[i, 0] < xlb:
-                positions[i, 0] = xlb + buf_len
+#         for i in range(self._num_inclusions):
+#             buf_len = self._proj_buffer[i] * np.random.random()
+#             if positions[i, 0] > xub:
+#                 positions[i, 0] = xub - buf_len
+#             elif positions[i, 0] < xlb:
+#                 positions[i, 0] = xlb + buf_len
 
-            if positions[i, 1] > yub:
-                positions[i, 1] = yub - buf_len
-            elif positions[i, 1] < ylb:
-                positions[i, 1] = ylb + buf_len
+#             if positions[i, 1] > yub:
+#                 positions[i, 1] = yub - buf_len
+#             elif positions[i, 1] < ylb:
+#                 positions[i, 1] = ylb + buf_len
 
-        self.eval_count["proj"] += 1
-        return positions.flatten(order="F")
+#         self.eval_count["proj"] += 1
+#         return positions.flatten(order="F")

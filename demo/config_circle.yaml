@@ -1,0 +1,46 @@
+verbose: 1
+rng_seed: 42
+num_cells: 2 # Number of unit cells to generate
+cell:
+  element_periodicity: false
+  element_min_gap: 0.05 # times sum of their equivalent radii
+  domain:
+    shape: rectangle
+    centre: [0, 0]
+    semi_major_length: 20
+    semi_minor_length: 20
+    major_axis_angle: 0
+
+  elements:
+    - name: Circle
+      vf: 0.3
+      params:
+        radius: uniform(1.0, 0.0)
+
+export:
+  output_dir: ./scratch/outputs/test_00
+  format: png # png, jpg, pdf, json, pkl, yml, npz
+  options:  # change according to format
+    element_facecolor: white
+    element_edgecolor: None
+    domain_facecolor: black
+    domain_edgecolor: None
+    size: [512, 512]
+    dpi: 100
+
+# ----------------------------------------------
+
+engine:
+  init_method: uniform
+  proj_buff_ratio: 2.0
+  optimiser:
+    name: nmspg
+    max_iter: 1000
+  adjust_bounds_to_exact_vf: false
+
+
+shapes:
+  - name: Circle
+    vf: 0.6
+    params:
+      radius: uniform(1, 0.1)
