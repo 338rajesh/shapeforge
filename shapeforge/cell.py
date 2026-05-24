@@ -79,8 +79,42 @@ class CellElement:
         if not isinstance(self.element, gb.GShape):
             raise ValueError(f"Element {self.element} is not a GShape.")
 
-    def initialise(self, domain: CellDomain):
+    def sample(self, domain: CellDomain):
         pass
+
+    @classmethod
+    def initialise(cls, domain: CellDomain, elements_config: dict):
+        elements: list[CellElement] = []
+        cum_vf = 0.0
+        for ith_ele_config in elements_config:
+            name, vf, size_sampler_sigs = _validate_dict(
+                ith_ele_config,
+                keys=["name", "vf", "params"],
+                val_types=[str, float, dict],
+                val_ranges=[None, (0.0, 1.0), None],
+                ret_val=True,
+            )
+            cum_vf += vf
+            if cum_vf > 1.0:
+                raise ValueError(
+                    f"Total volume fraction of inclusions exceeds 1.0. "
+                    f"Found {cum_vf}."
+                )
+            size_samplers = {
+                p_name: DistributionSampler.from_signature(sig, rng=rng)
+                for p_name, sig in size_sampler_sigs.items()
+            }
+            required_volume = domain.volume * vf
+            cumulative_volume = 0.0
+            generated_elements = []
+            while cumulative_volume < required_volume:
+                a_element = cls.sample()
+                generated_elements.append(a_element)
+                cumulative_volume += a_element.volume
+
+            elements.extend(generated_elements)
+        
+        return elements
 
 
 class Cell:
@@ -100,6 +134,7 @@ class Cell:
     @classmethod
     def initialise(cls, cell_config: dict, rng_seed, init_method="uniform"):
         cell_domain = CellDomain.from_dict(cell_config["domain"])
+
         elements = cell_config.get("elements", [])
         if len(elements) == 0:
             print(
