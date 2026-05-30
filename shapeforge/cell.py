@@ -148,6 +148,9 @@ class CellElement:
     def sample(self, domain: CellDomain):
         pass
 
+    def union_of_nspheres(self, *args, **kwargs) -> gb.CirclesArray:
+        return self.element.union_of_nspheres(*args, **kwargs)
+
     @classmethod
     def initialise(
         cls,
@@ -215,7 +218,7 @@ class Cell:
         elements: Sequence[CellElement] = None,
     ):
         self.domain = domain
-        self.elements = elements
+        self.elements: Sequence[CellElement] = elements
         #
         self._opt_problem = None
 
@@ -352,6 +355,11 @@ class Cell:
         shapes_plotter.close()
 
     def remove_inclusion_overlaps(self, ssd_ratio, proj_buffer_ratio) -> None:
+        # Get the union of circles (or spheres) that approximate the inclusions
+        elements: Sequence[gb.CirclesArray] = [
+            a_element.union_of_nspheres(dh=0.02) for a_element in self.elements
+        ]
+
         # Run Optim Loop to ensure there are no overlaps among inclusions
         #   Evaluate the cost function and gradients
         #     Add Periodic copies, if required
@@ -362,7 +370,7 @@ class Cell:
         #   If converged, return the optimised inclusions positions
         self._opt_problem = GShapes2DOverlap(
             domain=self.domain,
-            elements=self.elements,
+            elements=elements,
             ssd_ratio=ssd_ratio,
             proj_buffer_ratio=proj_buffer_ratio,
         )
@@ -506,25 +514,30 @@ class GShapes2DOverlap(OptimisationProblem):
     def __init__(
         self,
         domain: CellDomain,
-        elements: Sequence[CellElement],
+        elements: Sequence[gb.CirclesArray],
         *,
         ssd_ratio: float = 0.05,
         proj_buffer_ratio: float = 2.0,
     ):
         super().__init__()
         self.domain = domain
-        self.elements: Sequence[gb.GShape2D] = elements
+        self.elements: Sequence[gb.CirclesArray] = elements
 
         self._num_inclusions = len(elements)
-        self.x0 = (
-            [i.centre.x for i in elements]
-            + [i.centre.y for i in elements]
-            + [i.major_axis_angle for i in elements]
-        )
+        self._num_circles_per_element = [
+            len(circles_array) for circles_array in elements
+        ]
+        self.x0 = self._get_x0()
+        # self.x0 = (
+        #     [i.centre.x for i in elements]
+        #     + [i.centre.y for i in elements]
+        #     + [i.major_axis_angle for i in elements]
+        # )
         self._eq_radii = np.array(
             [i.element.equivalent_radius for i in elements]
         )
-        self._ssd = ssd_ratio * self._eq_radii
+        self._ssd_factor = ssd_ratio
+        # self._ssd = ssd_ratio * self._eq_radii
         self._proj_buffer = proj_buffer_ratio * self._eq_radii
 
         # self._inclusions: list[gb.GShape2D] = []
@@ -538,8 +551,30 @@ class GShapes2DOverlap(OptimisationProblem):
         #     + [i.major_axis_angle for i in self._inclusions]
         # )
 
+    def circles_array_to_x0(self) -> np.ndarray:
+        """
+        Converts a sequence of circles array to a single flattened 1D array.
+
+        `x11y11r11x12y12r12...x1jy1jr1j....xi1yi1ri1xi2yi2ri2.......xijyijrij`
+        """
+        x0 = np.concatenate(
+            [a_circles_array.data for a_circles_array in self.elements], axis=0
+        )
+        return x0.flatten(order="F")
+
+    def x0_to_circles_array(self, x0) -> list[gb.CirclesArray]:
+        nce = self._num_circles_per_element
+        data = np.asarray(x0).reshape((sum(nce), 3), order="F")
+        ele = []
+        x_start = 0
+        for i, n in enumerate(nce):
+            ele.append(gb.CirclesArray(data[x_start : x_start + n].copy()))
+            x_start += n
+        return ele
+
     def _overlap_cost_and_gradient(self, positions: np.ndarray):
-        xs, ys = positions.T
+        # xs, ys = positions.T
+        xs, ys, angles = positions.reshape(-1, 3, order="F").T
 
         cost = 0.0
         grad_x = np.zeros(self._num_inclusions)
@@ -570,8 +605,8 @@ class GShapes2DOverlap(OptimisationProblem):
         return cost, grad
 
     def f_and_grad(self, x: np.ndarray) -> tuple[float, np.ndarray]:
-        positions = x.reshape(-1, 2, order="F")  # x, y
-        f, g = self._overlap_cost_and_gradient(positions)
+        # positions = x.reshape(-1, 2, order="F")  # x, y
+        f, g = self._overlap_cost_and_gradient(x)
         self.eval_count["f_and_g"] += 1
         return f, g.flatten(order="F")
 
