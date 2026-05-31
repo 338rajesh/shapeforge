@@ -101,6 +101,9 @@ class CellDomain:
 
     @property
     def bounds(self) -> list[float]:
+        """
+        Get bounds of the domain in the order of `[xmin, ymin, xmax, ymax]`.
+        """
         _bounds = getattr(self.domain, "bounds", None)
         if _bounds is None:
             raise ValueError("Bounds not set.")
@@ -124,6 +127,11 @@ class CellDomain:
         return cls(**config)
 
 
+# ----------------------------------------------------
+# region CellElement
+# ----------------------------------------------------
+
+
 @dataclass
 class CellElement:
     name: str
@@ -144,6 +152,20 @@ class CellElement:
     @property
     def major_axis_angle(self):
         return self.element.major_axis_angle
+
+    @property
+    def pose(self):
+        return self.element.pose
+
+    @property
+    def bounding_box(self):
+        return self.element.bounding_box
+
+    def translate_and_rotate(self, *args, **kwargs):
+        return self.__class__(
+            name=self.name,
+            element=self.element.translate_and_rotate(*args, **kwargs),
+        )
 
     def sample(self, domain: CellDomain):
         pass
@@ -209,6 +231,11 @@ class CellElement:
             elements.extend(generated_elements)
 
         return elements
+
+
+# ----------------------------------------------------------------------------
+# region Cell
+# ----------------------------------------------------------------------------
 
 
 class Cell:
@@ -354,25 +381,12 @@ class Cell:
         shapes_plotter.saveas(f_path)
         shapes_plotter.close()
 
-    def remove_inclusion_overlaps(self, ssd_ratio, proj_buffer_ratio) -> None:
-        # Get the union of circles (or spheres) that approximate the inclusions
-        elements: Sequence[gb.CirclesArray] = [
-            a_element.union_of_nspheres(dh=0.02) for a_element in self.elements
-        ]
+    def remove_inclusion_overlaps(self, ssd_ratio) -> None:
 
-        # Run Optim Loop to ensure there are no overlaps among inclusions
-        #   Evaluate the cost function and gradients
-        #     Add Periodic copies, if required
-        #     cost evaluation
-        #     gradients evaluation
-        #   Update the inclusions positions
-        #   Check for convergence
-        #   If converged, return the optimised inclusions positions
         self._opt_problem = GShapes2DOverlap(
             domain=self.domain,
-            elements=elements,
+            elements=self.elements,
             ssd_ratio=ssd_ratio,
-            proj_buffer_ratio=proj_buffer_ratio,
         )
         result = nmspg(
             objective=self._opt_problem,
@@ -389,109 +403,15 @@ class Cell:
             p_bar=None,
         )
 
-        positions = result.x_optimal.reshape(-1, 2, order="F")
-        for idx, a_element in enumerate(self.elements):
-            a_element.element.centre = positions[idx, 0:2]
-            # for idx, a_shape in enumerate(shapes_list):
-            #     a_shape.centre = positions[idx, 0:2]
+        self.elements = self._opt_problem._get_updated_ele(result.x_optimal)
+        # positions = result.x_optimal.reshape(len(self.elements), 3, order="F")
+        # for idx, a_element in enumerate(self.elements):
+        #     a_element.element.centre = positions[idx, 0:2]
 
 
-# class CellCirclesOverlap(OptimisationProblem):
-#     """
-#     Overlap cost for a 2-D cell with circular inclusions, no periodicity.
-
-#     Parameters
-#     ----------
-#     domain : CellDomain
-#     shapes : dict[str, list[gb.GShape]]
-#         Output of ``initialise_shapes``; all shapes must be circles.
-#     ssd_ratio : float
-#         Minimum surface-to-surface gap as a fraction of each circle's
-#         radius.  Default 0.04 (4 %).
-#     proj_buffer_ratio : float
-#         Projection buffer thickness = proj_buffer_ratio x radius.
-#         Default 2.0 (mirrors Julia default).
-#     """
-
-#     def __init__(
-#         self,
-#         domain: CellDomain,
-#         # shapes: dict[str, list[gb.Circle]],
-#         elements: Sequence[CellElement],
-#         *,
-#         ssd_ratio: float = 0.05,
-#         proj_buffer_ratio: float = 2.0,
-#     ):
-#         super().__init__()
-#         self.domain = domain
-
-#         # self._inclusions: list[gb.Circle] = []
-#         # for g in shapes.values():
-#         #     self._inclusions.extend(g)
-#         self._num_inclusions = len(elements)
-
-#         self.x0 = [i.element.centre.x for i in elements] + [
-#             i.element.centre.y for i in elements
-#         ]
-#         self._radii = np.array([i.element.radius for i in elements])
-#         self._ssd = ssd_ratio * self._radii
-#         self._proj_buffer = proj_buffer_ratio * self._radii
-
-#     def _overlap_cost_and_gradient(self, positions: np.ndarray):
-#         xs, ys = positions.T
-
-#         cost = 0.0
-#         grad_x = np.zeros(self._num_inclusions)
-#         grad_y = np.zeros(self._num_inclusions)
-
-#         for i in range(self._num_inclusions):
-#             for j in range(1 + i, self._num_inclusions):
-#                 dx = xs[i] - xs[j]
-#                 dy = ys[i] - ys[j]
-#                 dist = math.hypot(dx, dy)
-
-#                 dca = self._radii[i] + self._radii[j] + self._ssd[i]
-#                 c = dca - dist
-
-#                 if c > 0.0:
-#                     dol = c / (dist + 1e-6)  # degree of overlap
-
-#                     cost += c * c  # making convex
-
-#                     tmp_gx = dol * dx
-#                     tmp_gy = dol * dy
-#                     grad_x[i] += tmp_gx
-#                     grad_x[j] -= tmp_gx
-#                     grad_y[i] += tmp_gy
-#                     grad_y[j] -= tmp_gy
-
-#         grad = -2.0 * np.column_stack([grad_x, grad_y])
-#         return cost, grad
-
-#     def f_and_grad(self, x: np.ndarray) -> tuple[float, np.ndarray]:
-#         positions = x.reshape(-1, 2, order="F")  # x, y
-#         f, g = self._overlap_cost_and_gradient(positions)
-#         self.eval_count["f_and_g"] += 1
-#         return f, g.flatten(order="F")
-
-#     def projection(self, x: np.ndarray) -> np.ndarray:
-#         positions = x.reshape(-1, 2, order="F")
-#         xlb, ylb, xub, yub = self.domain.bounds
-
-#         for i in range(self._num_inclusions):
-#             buf_len = self._proj_buffer[i] * np.random.random()
-#             if positions[i, 0] > xub:
-#                 positions[i, 0] = xub - buf_len
-#             elif positions[i, 0] < xlb:
-#                 positions[i, 0] = xlb + buf_len
-
-#             if positions[i, 1] > yub:
-#                 positions[i, 1] = yub - buf_len
-#             elif positions[i, 1] < ylb:
-#                 positions[i, 1] = ylb + buf_len
-
-#         self.eval_count["proj"] += 1
-#         return positions.flatten(order="F")
+# ---------------------------------------------------------
+# region OverlapProblem
+# ---------------------------------------------------------
 
 
 class GShapes2DOverlap(OptimisationProblem):
@@ -515,109 +435,111 @@ class GShapes2DOverlap(OptimisationProblem):
         self,
         domain: CellDomain,
         elements: Sequence[gb.GShape2D],
-        arr_circles: Sequence[gb.CirclesArray],
         *,
         ssd_ratio: float = 0.05,
-        proj_buffer_ratio: float = 2.0,
+        # proj_buffer_ratio: float = 2.0,
     ):
         super().__init__()
 
-        if len(elements) != len(arr_circles):
-            raise ValueError(
-                f"Number of elements ({len(elements)}) != number of "
-                f"circles arrays ({len(arr_circles)}"
-            )
-
-        self.domain = domain
-        self.elements: Sequence[gb.GShape2D] = elements
-        self.arr_circles: Sequence[gb.CirclesArray] = arr_circles
         self._num_inclusions = len(elements)
-        self._num_circles_per_element = [
-            len(circles_array) for circles_array in arr_circles
-        ]
-        self.x0 = self.circles_array_to_x0()
-        self._eq_radii = np.array(
-            [ele.equivalent_radius for ele in elements], dtype=np.float32
-        )
-        self._ssd_factor = ssd_ratio
-        self._proj_buffer = proj_buffer_ratio * self._eq_radii
+        self.domain = domain
+        self.elements: list[gb.GShape2D] = elements
+        self._ssd_factor = float(ssd_ratio)
+        self.x0 = self._poses_to_x0(elements)
 
-    def circles_array_to_x0(self) -> np.ndarray:
+    def _poses_to_x0(self, elements: list[gb.GShape2D]) -> np.ndarray:
         """
-        Converts a sequence of circles array to a single flattened 1D array.
-
-        `x11y11r11x12y12r12...x1jy1jr1j....xi1yi1ri1xi2yi2ri2.......xijyijrij`
+        Collect (x_i, y_i, θ_i) from each element and flatten to 1-D.
         """
-        x0 = np.concatenate(
-            [a_circles_array.data for a_circles_array in self.elements], axis=0
+        xyt_i = np.array([ele.pose for ele in elements], dtype=np.float32)
+        return xyt_i.flatten()
+
+    def _x0_to_poses(self, x0: np.ndarray):
+        """Return (N, 3) array of [x_i, y_i, θ_i] from flat vector."""
+        return np.asarray(x0, dtype=np.float32).reshape(
+            self._num_inclusions, 3
         )
-        return x0.flatten(order="F")
 
-    def x0_to_circles_array(self, x0) -> list[gb.CirclesArray]:
-        nce = self._num_circles_per_element
-        data = np.asarray(x0).reshape((sum(nce), 3), order="F")
-        ele = []
-        x_start = 0
-        for i, n in enumerate(nce):
-            ele.append(gb.CirclesArray(data[x_start : x_start + n].copy()))
-            x_start += n
-        return ele
-
-    def _overlap_cost_and_gradient(self, positions: np.ndarray):
-        # xs, ys = positions.T
-        x_, y_, r_ = positions.reshape(-1, 3, order="F").T
-
+    def _eval_cost_and_gradient(
+        self, ele: list[gb.GShape2D], ssd_factor: float
+    ):
+        num_inclusions = len(ele)
         cost = 0.0
-        grad_x = np.zeros(self._num_inclusions)
-        grad_y = np.zeros(self._num_inclusions)
+        grad_x = np.zeros(num_inclusions)
+        grad_y = np.zeros(num_inclusions)
+        grad_t = np.zeros(num_inclusions)
 
-        for i, ni in enumerate(self._num_circles_per_element):
-            for j, nj in enumerate(self._num_circles_per_element, start=i + 1):
-                
-                dx = xs[i] - xs[j]
-                dy = ys[i] - ys[j]
-                dist = math.hypot(dx, dy)
+        for i in range(num_inclusions):
+            ei = ele[i]
+            for j in range(i + 1, num_inclusions):
+                ej = ele[j]
 
-                dca = self._radii[i] + self._radii[j] + self._ssd[i]
-                c = dca - dist
+                if not ei.bounding_box.overlaps(ej.bounding_box):
+                    continue
 
-                if c > 0.0:
-                    dol = c / (dist + 1e-6)  # degree of overlap
+                ca_i = ei.union_of_nspheres(dh=0.02).data
+                ca_j = ej.union_of_nspheres(dh=0.02).data
 
-                    cost += c * c  # making convex
+                for ca_ik_x, ca_ik_y, ca_ik_r in ca_i:
+                    for ca_jl_x, ca_jl_y, ca_jl_r in ca_j:
+                        dx = ca_ik_x - ca_jl_x
+                        dy = ca_ik_y - ca_jl_y
+                        doc = (ca_ik_r + ca_jl_r) * (1.0 + ssd_factor)
+                        d_ikjl = math.hypot(dx, dy)
+                        cost_ikjl = doc - d_ikjl
+                        if cost_ikjl > 0:
+                            cost += cost_ikjl * cost_ikjl
 
-                    tmp_gx = dol * dx
-                    tmp_gy = dol * dy
-                    grad_x[i] += tmp_gx
-                    grad_x[j] -= tmp_gx
-                    grad_y[i] += tmp_gy
-                    grad_y[j] -= tmp_gy
+                            dol = cost_ikjl / (d_ikjl + 1e-6)
+                            tmp_gx = dol * dx
+                            tmp_gy = dol * dy
+                            grad_x[i] += tmp_gx
+                            grad_x[j] -= tmp_gx
+                            grad_y[i] += tmp_gy
+                            grad_y[j] -= tmp_gy
+                            grad_t[i] += dol * (
+                                dx * (ei.centre.y - ca_ik_y)
+                                - (dy * (ei.centre.x - ca_ik_x))
+                            )
+                            grad_t[j] -= dol * (
+                                dx * (ej.centre.y - ca_jl_y)
+                                - (dy * (ej.centre.x - ca_jl_x))
+                            )
 
-        grad = -2.0 * np.column_stack([grad_x, grad_y])
+        grad = -2.0 * np.column_stack([grad_x, grad_y, grad_t])
         return cost, grad
 
+    def _get_updated_ele(self, x: np.ndarray):
+        pose = self._x0_to_poses(x)
+        updated_ele = []
+        for idx, (dx, dy, dtheta) in enumerate(pose):
+            ei = self.elements[idx]
+            updated_ele.append(ei.translate_and_rotate(dx, dy, dtheta))
+        return updated_ele
+
     def f_and_grad(self, x: np.ndarray) -> tuple[float, np.ndarray]:
-        # positions = x.reshape(-1, 2, order="F")  # x, y
-        f, g = self._overlap_cost_and_gradient(x)
+        new_ele_pose = self._get_updated_ele(x)
+        f, g = self._eval_cost_and_gradient(new_ele_pose, self._ssd_factor)
         self.eval_count["f_and_g"] += 1
         return f, g.flatten(order="F")
 
     def projection(self, x: np.ndarray) -> np.ndarray:
-        positions = x.reshape(-1, 2, order="F")
-        xlb, xub = self.domain.x_bounds
-        ylb, yub = self.domain.y_bounds
+        positions = self._x0_to_poses(x)  # xyr
+        xlb, ylb, xub, yub = self.domain.bounds
 
         for i in range(self._num_inclusions):
-            buf_len = self._proj_buffer[i] * np.random.random()
             if positions[i, 0] > xub:
-                positions[i, 0] = xub - buf_len
+                positions[i, 0] = 2.0 * xub - positions[i, 0]
             elif positions[i, 0] < xlb:
-                positions[i, 0] = xlb + buf_len
+                positions[i, 0] = 2.0 * xlb - positions[i, 0]
 
             if positions[i, 1] > yub:
-                positions[i, 1] = yub - buf_len
+                positions[i, 1] = 2.0 * yub - positions[i, 1]
             elif positions[i, 1] < ylb:
-                positions[i, 1] = ylb + buf_len
+                positions[i, 1] = 2.0 * ylb - positions[i, 1]
 
         self.eval_count["proj"] += 1
         return positions.flatten(order="F")
+
+    def update_pose(self):
+        return

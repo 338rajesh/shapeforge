@@ -7,31 +7,31 @@ from .cell import Cell
 from .utils import load_yaml, Event
 
 
-def _generate_cell(
-    cfg: dict, get_init_cell: bool = False, log_handle: Event = None
-) -> Cell | tuple[Cell, Cell]:
-    cell_cfg = cfg["cell"]
-    # --------------------------------------------------------- #
-    #               Cell Initialization                         #
-    # --------------------------------------------------------- #
-    cell = Cell.initialise(
-        cell_cfg, cfg["rng_seed"], init_method=cfg["engine"]["init_method"]
-    )
-    init_cell_copy = cell.clone()
+# def _generate_cell(
+#     cfg: dict, get_init_cell: bool = False, log_handle: Event = None
+# ) -> Cell | tuple[Cell, Cell]:
+#     cell_cfg = cfg["cell"]
+#     # --------------------------------------------------------- #
+#     #               Cell Initialization                         #
+#     # --------------------------------------------------------- #
+#     cell = Cell.initialise(
+#         cell_cfg, cfg["rng_seed"], init_method=cfg["engine"]["init_method"]
+#     )
+#     init_cell_copy = cell.clone()
 
-    # --------------------------------------------------------- #
-    #               Cell Optimisation                           #
-    # --------------------------------------------------------- #
-    cell.remove_inclusion_overlaps(
-        ssd_ratio=cell_cfg.get("element_min_gap", 0.05),
-        proj_buffer_ratio=cfg.get("engine", {}).get("proj_buffer_ratio", 0.5),
-    )
-    if log_handle is not None:
-        log_handle.log("Inclusions overlaps are removed.")
+#     # --------------------------------------------------------- #
+#     #               Cell Optimisation                           #
+#     # --------------------------------------------------------- #
+#     cell.remove_inclusion_overlaps(
+#         ssd_ratio=cell_cfg.get("element_min_gap", 0.05),
+#         proj_buffer_ratio=cfg.get("engine", {}).get("proj_buffer_ratio", 0.5),
+#     )
+#     if log_handle is not None:
+#         log_handle.log("Inclusions overlaps are removed.")
 
-    if get_init_cell:
-        return cell, init_cell_copy
-    return cell
+#     if get_init_cell:
+#         return cell, init_cell_copy
+#     return cell
 
 
 def _load_input_file(config: Path):
@@ -104,9 +104,9 @@ def generate_cell(config: dict | str | Path) -> Cell:
         with Event("Removing inclusions overlaps..."):
             cell.remove_inclusion_overlaps(
                 ssd_ratio=config["cell"].get("element_min_gap", 0.05),
-                proj_buffer_ratio=config.get("engine", {}).get(
-                    "proj_buffer_ratio", 0.5
-                ),
+                # proj_buffer_ratio=config.get("engine", {}).get(
+                #     "proj_buffer_ratio", 0.5
+                # ),
             )
 
         with Event(f"Exporting cell {i}..."):

@@ -15,7 +15,7 @@ cell:
     - name: Circle
       vf: 0.3
       params:
-        radius: uniform(1.0, 0.0)
+        radius: uniform(3.0, 0.0)
 
 export:
   output_dir: ./scratch/outputs/test_00
@@ -32,15 +32,15 @@ export:
 
 engine:
   init_method: uniform
-  proj_buff_ratio: 2.0
+  # proj_buff_ratio: 0.1
   optimiser:
     name: nmspg
     max_iter: 1000
   adjust_bounds_to_exact_vf: false
 
 
-shapes:
-  - name: Circle
-    vf: 0.6
-    params:
-      radius: uniform(1, 0.1)
+# shapes:
+#   - name: Circle
+#     vf: 0.6
+#     params:
+#       radius: uniform(1, 0.1)
