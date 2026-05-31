@@ -514,42 +514,33 @@ class GShapes2DOverlap(OptimisationProblem):
     def __init__(
         self,
         domain: CellDomain,
-        elements: Sequence[gb.CirclesArray],
+        elements: Sequence[gb.GShape2D],
+        arr_circles: Sequence[gb.CirclesArray],
         *,
         ssd_ratio: float = 0.05,
         proj_buffer_ratio: float = 2.0,
     ):
         super().__init__()
-        self.domain = domain
-        self.elements: Sequence[gb.CirclesArray] = elements
 
+        if len(elements) != len(arr_circles):
+            raise ValueError(
+                f"Number of elements ({len(elements)}) != number of "
+                f"circles arrays ({len(arr_circles)}"
+            )
+
+        self.domain = domain
+        self.elements: Sequence[gb.GShape2D] = elements
+        self.arr_circles: Sequence[gb.CirclesArray] = arr_circles
         self._num_inclusions = len(elements)
         self._num_circles_per_element = [
-            len(circles_array) for circles_array in elements
+            len(circles_array) for circles_array in arr_circles
         ]
-        self.x0 = self._get_x0()
-        # self.x0 = (
-        #     [i.centre.x for i in elements]
-        #     + [i.centre.y for i in elements]
-        #     + [i.major_axis_angle for i in elements]
-        # )
+        self.x0 = self.circles_array_to_x0()
         self._eq_radii = np.array(
-            [i.element.equivalent_radius for i in elements]
+            [ele.equivalent_radius for ele in elements], dtype=np.float32
         )
         self._ssd_factor = ssd_ratio
-        # self._ssd = ssd_ratio * self._eq_radii
         self._proj_buffer = proj_buffer_ratio * self._eq_radii
-
-        # self._inclusions: list[gb.GShape2D] = []
-        # for g in shapes.values():
-        #     self._inclusions.extend(g)
-        # self._num_inclusions = len(self._inclusions)
-
-        # self.x0 = (
-        #     [i.centre.x for i in self._inclusions]
-        #     + [i.centre.y for i in self._inclusions]
-        #     + [i.major_axis_angle for i in self._inclusions]
-        # )
 
     def circles_array_to_x0(self) -> np.ndarray:
         """
@@ -574,14 +565,15 @@ class GShapes2DOverlap(OptimisationProblem):
 
     def _overlap_cost_and_gradient(self, positions: np.ndarray):
         # xs, ys = positions.T
-        xs, ys, angles = positions.reshape(-1, 3, order="F").T
+        x_, y_, r_ = positions.reshape(-1, 3, order="F").T
 
         cost = 0.0
         grad_x = np.zeros(self._num_inclusions)
         grad_y = np.zeros(self._num_inclusions)
 
-        for i in range(self._num_inclusions):
-            for j in range(1 + i, self._num_inclusions):
+        for i, ni in enumerate(self._num_circles_per_element):
+            for j, nj in enumerate(self._num_circles_per_element, start=i + 1):
+                
                 dx = xs[i] - xs[j]
                 dy = ys[i] - ys[j]
                 dist = math.hypot(dx, dy)
