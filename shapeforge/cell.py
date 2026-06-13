@@ -1,17 +1,17 @@
-import math
 import json
+import math
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence, Any
+from typing import Any, Sequence
 
 import gbox as gb
 import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 
-from .optim import nmspg, OptimisationProblem
-from .utils import _validate_dict, DistributionSampler
+from .optim import OptimisationProblem, nmspg
+from .utils import DistributionSampler, _validate_dict
 
 
 @dataclass
@@ -200,8 +200,7 @@ class CellElement:
             cum_vf += vf
             if cum_vf > 1.0:
                 raise ValueError(
-                    f"Total volume fraction of inclusions exceeds 1.0. "
-                    f"Found {cum_vf}."
+                    f"Total volume fraction of inclusions exceeds 1.0. Found {cum_vf}."
                 )
             size_samplers = {
                 p_name: DistributionSampler.from_signature(sig, rng=rng)
@@ -381,13 +380,15 @@ class Cell:
         shapes_plotter.saveas(f_path)
         shapes_plotter.close()
 
-    def remove_inclusion_overlaps(self, ssd_ratio) -> None:
+    def remove_inclusion_overlaps(self, ssd_ratio, *, logger=None) -> None:
 
         self._opt_problem = GShapes2DOverlap(
             domain=self.domain,
             elements=self.elements,
             ssd_ratio=ssd_ratio,
         )
+
+        logger.log(">> Solving the optimisation problem...")
         result = nmspg(
             objective=self._opt_problem,
             x0=self._opt_problem.x0,
@@ -450,19 +451,26 @@ class GShapes2DOverlap(OptimisationProblem):
     def _poses_to_x0(self, elements: list[gb.GShape2D]) -> np.ndarray:
         """
         Collect (x_i, y_i, θ_i) from each element and flatten to 1-D.
+
+        Parameters
+        ----------
+        elements : list[gb.GShape2D]
+            List of geometric shapes.
+
+        Returns
+        -------
+        x0 : np.ndarray
+            1-D array of (x_i, y_i, θ_i) values.
         """
         xyt_i = np.array([ele.pose for ele in elements], dtype=np.float32)
+
         return xyt_i.flatten()
 
     def _x0_to_poses(self, x0: np.ndarray):
         """Return (N, 3) array of [x_i, y_i, θ_i] from flat vector."""
-        return np.asarray(x0, dtype=np.float32).reshape(
-            self._num_inclusions, 3
-        )
+        return np.asarray(x0, dtype=np.float32).reshape(self._num_inclusions, 3)
 
-    def _eval_cost_and_gradient(
-        self, ele: list[gb.GShape2D], ssd_factor: float
-    ):
+    def _eval_cost_and_gradient(self, ele: list[gb.GShape2D], ssd_factor: float):
         num_inclusions = len(ele)
         cost = 0.0
         grad_x = np.zeros(num_inclusions)

@@ -28,18 +28,18 @@ class Event:
         self.start_time = time.perf_counter()
         logging.log(
             logging.INFO,
-            f"> Starting '{self.msg}'...",
+            f" {self.msg}",
         )
         return self
 
     @staticmethod
     def log(msg: str, level: str = logging.INFO):
-        logging.log(level, f"  {msg}")
+        logging.log(level, f" {msg}")
 
     def __exit__(self, exc_type, exc_value, traceback):
         elapsed_time = time.perf_counter() - self.start_time
         elapsed_time = self._get_readable_time(elapsed_time)
-        logging.log(logging.INFO, f"..Completed in {elapsed_time}")
+        logging.log(logging.INFO, f" Completed in {elapsed_time}")
 
     @staticmethod
     def _get_readable_time(t: float) -> str:

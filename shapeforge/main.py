@@ -6,34 +6,6 @@ from pathlib import Path
 from .cell import Cell
 from .utils import load_yaml, Event
 
-
-# def _generate_cell(
-#     cfg: dict, get_init_cell: bool = False, log_handle: Event = None
-# ) -> Cell | tuple[Cell, Cell]:
-#     cell_cfg = cfg["cell"]
-#     # --------------------------------------------------------- #
-#     #               Cell Initialization                         #
-#     # --------------------------------------------------------- #
-#     cell = Cell.initialise(
-#         cell_cfg, cfg["rng_seed"], init_method=cfg["engine"]["init_method"]
-#     )
-#     init_cell_copy = cell.clone()
-
-#     # --------------------------------------------------------- #
-#     #               Cell Optimisation                           #
-#     # --------------------------------------------------------- #
-#     cell.remove_inclusion_overlaps(
-#         ssd_ratio=cell_cfg.get("element_min_gap", 0.05),
-#         proj_buffer_ratio=cfg.get("engine", {}).get("proj_buffer_ratio", 0.5),
-#     )
-#     if log_handle is not None:
-#         log_handle.log("Inclusions overlaps are removed.")
-
-#     if get_init_cell:
-#         return cell, init_cell_copy
-#     return cell
-
-
 def _load_input_file(config: Path):
     if isinstance(config, (str, Path)):
         config = load_yaml(config)
@@ -91,29 +63,32 @@ def generate_cell(config: dict | str | Path) -> Cell:
         )
 
     num_cells = _validate_num_cells(config.get("num_cells", 1))
-    for i in range(num_cells):
-        config["rng_seed"] = config["rng_seed"] + i
-        Event.log(f"Generating cell {i} with seed {config['rng_seed']}...")
+    Event.log(f"Generating {num_cells} cells")
 
-        # f"Generating cell {i} with seed {config['rng_seed']}..."
-        with Event("Initializing the cell..."):
+    print(f"{'=' * 50}")
+    for i in range(num_cells):
+        print(f"\n{'-' * 20} Cell {i:02d} {'-' * 20}\n")
+        config["rng_seed"] = config["rng_seed"] + i
+        Event.log(f"Random number generation seed {config['rng_seed']}")
+
+        with Event(">> Initializing the cell..."):
             cell = Cell.initialise(
                 config["cell"], config["rng_seed"], init_method="uniform"
             )
 
-        with Event("Removing inclusions overlaps..."):
+        with Event(">> Removing inclusions overlaps...") as el:
             cell.remove_inclusion_overlaps(
-                ssd_ratio=config["cell"].get("element_min_gap", 0.05),
-                # proj_buffer_ratio=config.get("engine", {}).get(
-                #     "proj_buffer_ratio", 0.5
-                # ),
+                ssd_ratio=config["cell"].get("element_min_gap", 0.05), logger=el
             )
 
         with Event(f"Exporting cell {i}..."):
             cell.export(
                 f_path=get_file_path(i), options=config["export"]["options"]
             )
-    Event.log("Completed cell generation.")
+    else:
+        print(f"{'-' * 50}")
+        Event.log("Completed cell generation.")
+        print(f"{'=' * 50}")
 
 
 def main():

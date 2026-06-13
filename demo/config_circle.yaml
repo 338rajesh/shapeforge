@@ -1,4 +1,4 @@
-verbose: 1
+verbose: 5
 rng_seed: 42
 num_cells: 2 # Number of unit cells to generate
 cell:
