@@ -1,39 +1,66 @@
-num_cells: 2 # Number of unit cells to generate
+# ============================================================================
+# ShapeForge Configuration File
+# Standard Unit System: Metric (e.g., mm for lengths) or Dimensionless
+# ============================================================================
 
+# ----------------------------------------------------------------------------
+# Metadata & Execution
+# ----------------------------------------------------------------------------
+metadata:
+  project_name: "shapeforge-demo"
+  rng_seed: 42
+  log_level: info
+  num_cells: 2
+
+# ----------------------------------------------------------------------------
+# Spatial Domain Definition
+# ----------------------------------------------------------------------------
 domain:
   shape: rectangle
-  bounds: [0, 0, 30, 30] # x_min, y_min, x_max, y_max
+  bounds:
+    x_min: 0.0
+    y_min: 0.0
+    x_max: 10.0
+    y_max: 10.0
 
+# ----------------------------------------------------------------------------
+# Inclusion Phase Geometry
+# ----------------------------------------------------------------------------
 shapes:
   - name: Circle
-    vf: 0.6
+    volume_fraction: 0.6
     params:
+      # params might be constant or might follow a distribution. Constant
+      # values can be passed as float values, while the params with a
+      # distribution must be defined with "distr_name(loc, scale)" signature
       radius: uniform(1, 0.1)
 
-export:
-  output_dir: ./scratch/outputs/test_1
-  as_array: false
-  format: png # png, jpg, pdf, json, pkl, yml, npz
-  plot_with:
-    shape_facecolor: white
-    shape_edgecolor: None
-    bg_facecolor: black
-    bg_edgecolor: None
-    size: [512, 512]
-    dpi: 100
-
-packing:
-  periodic: false
-  min_gap: 0.05
-
-verbose: 1
-rng_seed: 42
-# # ----------------------------------------------
-
-engine:
-  init_method: uniform
-  proj_buff_ratio: 2.0
+# ----------------------------------------------------------------------------
+# Solver & Optimization Engine Configuration
+# ----------------------------------------------------------------------------
+solver:
+  init_method: uniform # uniform | lhs | sobol
   optimiser:
     name: nmspg
     max_iter: 1000
-  adjust_bounds_to_exact_vf: false
+    epsilon: 1.0e-6
+
+  packing:
+    periodic: false
+    min_gap_ratio: 0.05
+    proj_buffer_ratio: 2.0
+    adjust_bounds_to_exact_vf: false
+
+# ----------------------------------------------------------------------------
+# Export & Visualization Outputs
+# ----------------------------------------------------------------------------
+export:
+  output_dir: ./scratch/outputs/test_1
+  as_array: false
+  formats: # png, jpg, pdf, json, pkl, yml, npz
+    - png
+    - json
+  background: 0
+  facecolor: 255
+  image_dimensions: [512, 512]
+  dpi: 100

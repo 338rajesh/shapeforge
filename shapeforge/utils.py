@@ -1,15 +1,15 @@
 import json
 import re
-from pathlib import Path
-
-import yaml
-
 from functools import partial
-from typing import Optional
+from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
+import yaml
+from gbox.core.utils import Validator, get_logger
 from scipy import stats
+
+logger = get_logger(__name__)
 
 
 class DistributionSampler:
@@ -22,7 +22,7 @@ class DistributionSampler:
         method: str,
         loc: float,
         scale: float,
-        rng: Optional[np.random.Generator] = None,
+        rng: np.random.Generator | None = None,
         rvs_kwargs=None,
     ):
         """
@@ -84,7 +84,7 @@ class DistributionSampler:
         cls, sig: str, rng=None, rvs_kwargs=None
     ) -> "DistributionSampler":
         if not isinstance(sig, str):
-            raise ValueError("Signature must be a string.")
+            raise TypeError("Signature must be a string.")
         match = re.match(r"(\w+)\((.*)\)", sig)
         if not match:
             raise ValueError(
@@ -120,107 +120,36 @@ class DistributionSampler:
         return a
 
 
-def load_yaml(file_path: str, show: bool = False) -> dict:
+def _load_dict(file_path: str | Path) -> dict:
     """
-    Load a YAML configuration file and optionally print its contents.
+    Load a dictionary from a YAML/JSON file and optionally print its contents.
 
     Parameters
     ----------
     file_path : str
-        The path to the YAML configuration file.
+        The path to the YAML/JSON file.
     show : bool, optional
         If True, print the loaded configuration. Default is False.
 
     Returns
     -------
     dict
-        The loaded configuration as a dictionary.
+        The loaded dictionary.
     """
-    fp = Path(file_path).resolve()
-    if not fp.exists():
-        raise FileNotFoundError(
-            f"Configuration file '{file_path}' does not exist."
-        )
-    if not fp.suffix == ".yaml":
-        raise ValueError(
-            f"Configuration file '{file_path}' must have a .yaml extension."
-        )
+    fp = Validator.file_path(
+        file_path, must_exist=True, extensions=[".json", ".yml", ".yaml"]
+    )
+    with open(fp, "r") as file:
+        if fp.suffix in (".yaml", "yml"):
+            config = yaml.safe_load(file)
+        else:  # ".json"
+            config = json.load(file)
 
-    with open(file_path, "r") as file:
-        config = yaml.safe_load(file)
+    Validator.is_type(config, dict, name="loaded values")
 
-    if show:
-        json_str = json.dumps(config, indent=4)
-        print(f"Loaded configuration from {file_path}:\n{json_str}")
+    logger.debug(
+        f"Loaded configuration from {file_path}:\n"
+        f"{json.dumps(config, indent=4)}"
+    )
 
     return config
-
-
-def _validate_dict(
-    d: dict,
-    keys: list,
-    val_types: list = None,
-    val_ranges: list[tuple | None] = None,
-    ret_val: bool = False,
-) -> None | tuple:
-    """
-    Validate that a dictionary contains specific keys.
-
-    Parameters
-    ----------
-    d : dict
-        The dictionary to validate.
-    keys : list
-        The list of keys that must be present in the dictionary.
-    val_types : list, optional
-        A list of types corresponding to each key in `keys`. If provided,
-        the function will also check that the values associated with each key
-        are of the specified type.
-    ret_val : bool, optional
-        If True, the function will return the values associated with the keys
-        in the same order as the keys. Default is False.
-    Raises
-    ------
-    ValueError
-        If any of the specified keys are missing from the dictionary.
-    """
-    if not isinstance(d, dict):
-        raise TypeError("Input must be a dictionary.")
-    if not isinstance(keys, list):
-        raise TypeError("Expected keys must be provided as a list.")
-
-    missing_keys = [key for key in keys if key not in d]
-    if missing_keys:
-        missing_keys_str = ", ".join(missing_keys)
-        given_keys_str = ", ".join(d.keys())
-        raise ValueError(
-            f"Missing keys: '{missing_keys_str}'\nGiven keys: '{given_keys_str}'"
-        )
-    if val_types is None:
-        val_types = [None] * len(keys)
-    if len(keys) != len(val_types):
-        raise ValueError("Length of keys and val_types must match.")
-    for key, val_type in zip(keys, val_types):
-        if val_type is None:
-            continue
-        if not isinstance(d[key], val_type):
-            raise TypeError(
-                f"Value for key '{key}' must be of type {val_type.__name__}, "
-                f"but got {type(d[key]).__name__}."
-            )
-
-    if val_ranges is None:
-        val_ranges = [None] * len(keys)
-    if len(keys) != len(val_ranges):
-        raise ValueError("Length of keys and val_ranges must match.")
-    for key, val_range in zip(keys, val_ranges):
-        if val_range is None:
-            continue
-        if d[key] < val_range[0] or d[key] > val_range[1]:
-            raise ValueError(
-                f"Value for key '{key}' must be between {val_range[0]}, and "
-                f"{val_range[1]}, but got {d[key]}"
-            )
-
-    if ret_val:
-        return tuple(d[key] for key in keys)

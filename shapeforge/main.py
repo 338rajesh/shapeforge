@@ -2,12 +2,13 @@ import argparse
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
-from .cell import CellDomain, initialise_shapes
-from .cell import Cell
-from .utils import load_yaml
+from .cell import Cell, CellDomain, initialise_shapes
+from .config import ShapeForgeConfig
+from .utils import _load_dict
 
 
 def _generate_cell(
@@ -50,15 +51,14 @@ def _generate_cell(
     return cell
 
 
-def generate_cell(config: dict | str | Path) -> Cell:
+def generate_cell(config: dict[str, Any]) -> Cell:
     """
     Generate a unit cell with the specified configuration.
     """
     print("Starting the cell genration...")
-    if isinstance(config, (str, Path)):
-        config = load_yaml(config)
-    if not isinstance(config, dict):
-        raise ValueError("Expecting config to be a dictionary.")
+
+    cfg = ShapeForgeConfig.from_dict(config)
+
     print("> Loaded the configuration")
 
     verbose = int(config.get("verbose", 1))
@@ -80,7 +80,6 @@ def generate_cell(config: dict | str | Path) -> Cell:
     output_dir.mkdir(exist_ok=True, parents=True)
     export_fmt = export_options.get("format", "png")
 
-    
     if verbose > 10:
         print("Generating the Cell with configuration:")
         print(json.dumps(config, indent=4))
@@ -119,7 +118,8 @@ def main():
         help="Path to the YAML configuration file for the shape forge.",
     )
     args = parser.parse_args()
-    generate_cell(args.config_file)
+    config = _load_dict(args.config_file)
+    generate_cell(config)
 
 
 if __name__ == "__main__":

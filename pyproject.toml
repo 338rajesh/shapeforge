@@ -23,7 +23,7 @@ classifiers = [
     "Operating System :: OS Independent"
 ]
 dependencies = [
-    "gbox>=0.2.0",
+    "gbox>=1.0.0",
     "numpy>=2.2.0",
     "scipy>=1.15.2",
     "matplotlib>=3.10.0",
@@ -52,3 +52,6 @@ shapeforge = "shapeforge.main:main"
 [tool.setuptools.packages.find]
 # exclude any top-level dirs that should not be packaged (e.g. scratch)
 exclude = ["scratch", ".venv", ".git", "__pycache__", "build", "dist"]
+
+[tool.uv.sources]
+gbox = { path = "../gbox" }
