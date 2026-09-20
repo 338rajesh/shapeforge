@@ -1,54 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
+from numbers import Number
 from pathlib import Path
-from typing import Any
 
 from gbox.core.utils import Bounds2DRectangular, Validator
+from gbox.shapes import SHAPES_2D_MAPPING as GBOX_2D_SHAPES_MAPPING
 
-# ============================================================================
-# Helpers
-# ============================================================================
+from .utils import DistributionSpec, _load_dict
 
-
-def _require_dict(value: Any, name: str) -> dict:
-    return Validator.dict(value, name=name)
-
-
-def _required_keys(
-    value: dict,
-    keys: list[str],
-    name: str,
-    *,
-    reject_extra_keys: bool = False,
-) -> dict:
-    return Validator.dict(
-        value,
-        keys=keys,
-        name=name,
-        reject_extra_keys=reject_extra_keys,
-    )
-
-
-def _string(
-    value: Any,
-    *,
-    name: str,
-    allowed: set[str] | None = None,
-) -> str:
-    Validator.is_type(value, str, name=name)
-
-    if allowed is not None and value not in allowed:
-        raise ValueError(
-            f"Given value '{name}' must be one of {sorted(allowed)}, "
-            f"but got {value!r}"
-        )
-
-    return value
-
-
-def _bool(value: Any, *, name: str) -> bool:
-    return Validator.is_type(value, bool, name=name) and value
+ALLOWABLE_EXPORT_FORMATS = {"png", "jpg", "pdf", "json", "pkl", "yml", "npz"}
 
 
 # ============================================================================
@@ -58,48 +20,20 @@ def _bool(value: Any, *, name: str) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class MetadataConfig:
-    project_name: str
+    title: str
     rng_seed: int
     log_level: str
-    num_cells: int
 
     @classmethod
     def from_dict(cls, data: dict) -> MetadataConfig:
-        _required_keys(
+        data = Validator.as_dict(
             data,
-            ["project_name", "rng_seed", "log_level", "num_cells"],
-            "metadata",
+            name="metadata",
+            keys=["title", "rng_seed", "log_level"],
+            types=[str, int, str],
+            reject_extra_keys=True,
         )
-
-        project_name = _string(
-            data["project_name"],
-            name="metadata.project_name",
-        )
-
-        rng_seed = Validator.int(
-            data["rng_seed"],
-            low=0,
-            name="metadata.rng_seed",
-        )
-
-        log_level = _string(
-            data["log_level"],
-            name="metadata.log_level",
-            allowed={"debug", "info", "warning", "error", "critical"},
-        )
-
-        num_cells = Validator.int(
-            data["num_cells"],
-            low=1,
-            name="metadata.num_cells",
-        )
-
-        return cls(
-            project_name=project_name,
-            rng_seed=rng_seed,
-            log_level=log_level,
-            num_cells=num_cells,
-        )
+        return cls(**data)
 
 
 # ============================================================================
@@ -114,45 +48,26 @@ class DomainConfig:
 
     @classmethod
     def from_dict(cls, data: dict) -> DomainConfig:
-        _required_keys(
+        data = Validator.as_dict(
             data,
-            ["shape", "bounds"],
-            "domain",
+            name="domain",
+            keys=["shape", "bounds"],
+            types=[str, dict],
+            reject_extra_keys=True,
         )
 
-        shape = _string(
-            data["shape"],
-            name="domain.shape",
-            allowed={"rectangle"},
-        )
-
-        bounds_data = _required_keys(
+        bounds = Validator.as_dict(
             data["bounds"],
-            ["x_min", "y_min", "x_max", "y_max"],
-            "domain.bounds",
+            name="domain.bounds",
+            keys=["x_min", "y_min", "x_max", "y_max"],
+            types=[Number, Number, Number, Number],
+            reject_extra_keys=True,
         )
-
-        bounds = Bounds2DRectangular(
-            x_min=Validator.float(
-                bounds_data["x_min"],
-                name="domain.bounds.x_min",
-            ),
-            y_min=Validator.float(
-                bounds_data["y_min"],
-                name="domain.bounds.y_min",
-            ),
-            x_max=Validator.float(
-                bounds_data["x_max"],
-                name="domain.bounds.x_max",
-            ),
-            y_max=Validator.float(
-                bounds_data["y_max"],
-                name="domain.bounds.y_max",
-            ),
-        )
+        bounds = {k: float(v) for k, v in bounds.items()}
+        bounds = Bounds2DRectangular(**bounds)
 
         return cls(
-            shape=shape,
+            shape=data["shape"],
             bounds=bounds,
         )
 
@@ -166,22 +81,22 @@ class DomainConfig:
 class ShapeConfig:
     name: str
     volume_fraction: float
-    params: dict[str, float | str]
+    params: dict[str, float | DistributionSpec]
 
     @classmethod
     def from_dict(cls, data: dict) -> ShapeConfig:
-        _required_keys(
+        data = Validator.as_dict(
             data,
-            ["name", "volume_fraction", "params"],
-            "shape",
+            name="Shapes",
+            keys=["name", "volume_fraction", "params"],
         )
 
-        name = _string(
-            data["name"],
-            name="shape.name",
-        )
+        shape_name = Validator.as_string(
+            data["name"], min_length=1, name="shape.name"
+        ).lower()
+        Validator.has(shape_name, list(GBOX_2D_SHAPES_MAPPING.keys()))
 
-        volume_fraction = Validator.float(
+        volume_fraction = Validator.as_float(
             data["volume_fraction"],
             low=0.0,
             high=1.0,
@@ -189,88 +104,35 @@ class ShapeConfig:
             name="shape.volume_fraction",
         )
 
-        params_data = _require_dict(
-            data["params"],
-            "shape.params",
-        )
-
-        params: dict[str, float | str] = {}
-
-        for parameter_name, value in params_data.items():
-            _string(
-                parameter_name,
-                name="shape parameter name",
+        Validator.as_dict(data["params"], name="shape.params")
+        params: dict[str, float | DistributionSpec] = {}
+        for p_name, p_value in data["params"].items():
+            Validator.as_string(
+                p_name, min_length=1, name=f"shape.params.{p_name}"
             )
 
-            if isinstance(value, bool):
+            if isinstance(p_value, bool):
                 raise TypeError(
-                    f"Shape parameter '{parameter_name}' must be a float "
+                    f"Shape parameter '{p_name}' must be a float "
                     f"or distribution expression, but got bool"
                 )
 
-            if isinstance(value, (int, float)):
-                params[parameter_name] = Validator.float(
-                    value,
-                    name=f"shape.params.{parameter_name}",
+            if isinstance(p_value, (int, float)):
+                params[p_name] = Validator.as_float(
+                    p_value, name=f"shape.params.{p_name}"
                 )
-
-            elif isinstance(value, str):
-                params[parameter_name] = value
-
+            elif isinstance(p_value, str):
+                params[p_name] = DistributionSpec.from_signature(p_value)
             else:
                 raise TypeError(
-                    f"Shape parameter '{parameter_name}' must be a float "
-                    f"or distribution expression, but got {type(value)}"
+                    f"Shape parameter '{p_name}' must be a float "
+                    f"or distribution expression, but got {type(p_value)}"
                 )
 
         return cls(
-            name=name,
+            name=shape_name,
             volume_fraction=volume_fraction,
             params=params,
-        )
-
-
-# ============================================================================
-# Optimiser
-# ============================================================================
-
-
-@dataclass(frozen=True, slots=True)
-class OptimiserConfig:
-    name: str
-    max_iter: int
-    epsilon: float
-
-    @classmethod
-    def from_dict(cls, data: dict) -> OptimiserConfig:
-        _required_keys(
-            data,
-            ["name", "max_iter", "epsilon"],
-            "solver.optimiser",
-        )
-
-        name = _string(
-            data["name"],
-            name="solver.optimiser.name",
-        )
-
-        max_iter = Validator.int(
-            data["max_iter"],
-            low=1,
-            name="solver.optimiser.max_iter",
-        )
-
-        epsilon = Validator.float(
-            data["epsilon"],
-            low=0.0,
-            closed_bounds=False,
-            name="solver.optimiser.epsilon",
-        )
-
-        return cls(
-            name=name,
-            max_iter=max_iter,
-            epsilon=epsilon,
         )
 
 
@@ -281,52 +143,38 @@ class OptimiserConfig:
 
 @dataclass(frozen=True, slots=True)
 class PackingConfig:
-    periodic: bool
     min_gap_ratio: float
-    proj_buffer_ratio: float
-    adjust_bounds_to_exact_vf: bool
+    periodicity: bool = False
+    proj_buffer_ratio: float | None = None
+    adjust_bounds_to_exact_vf: bool = False
 
     @classmethod
     def from_dict(cls, data: dict) -> PackingConfig:
-        _required_keys(
+        data = Validator.as_dict(
             data,
-            [
-                "periodic",
+            name="Packing",
+            keys=[
                 "min_gap_ratio",
+                "periodicity",
                 "proj_buffer_ratio",
                 "adjust_bounds_to_exact_vf",
             ],
-            "solver.packing",
+            types=[float, bool, float, bool],
+            reject_extra_keys=True,
         )
-
-        periodic = _bool(
-            data["periodic"],
-            name="solver.packing.periodic",
-        )
-
-        min_gap_ratio = Validator.float(
+        data["min_gap_ratio"] = Validator.as_float(
             data["min_gap_ratio"],
             low=0.0,
-            name="solver.packing.min_gap_ratio",
+            closed_bounds=False,
+            name="Minimum Gap Ratio",
         )
-
-        proj_buffer_ratio = Validator.float(
+        data["proj_buffer_ratio"] = Validator.as_float(
             data["proj_buffer_ratio"],
             low=0.0,
-            name="solver.packing.proj_buffer_ratio",
+            closed_bounds=False,
+            name="Projection Buffer Ratio",
         )
-
-        adjust_bounds_to_exact_vf = _bool(
-            data["adjust_bounds_to_exact_vf"],
-            name="solver.packing.adjust_bounds_to_exact_vf",
-        )
-
-        return cls(
-            periodic=periodic,
-            min_gap_ratio=min_gap_ratio,
-            proj_buffer_ratio=proj_buffer_ratio,
-            adjust_bounds_to_exact_vf=adjust_bounds_to_exact_vf,
-        )
+        return cls(**data)
 
 
 # ============================================================================
@@ -337,42 +185,24 @@ class PackingConfig:
 @dataclass(frozen=True, slots=True)
 class SolverConfig:
     init_method: str
-    optimiser: OptimiserConfig
-    packing: PackingConfig
+    optimiser: dict
 
     @classmethod
     def from_dict(cls, data: dict) -> SolverConfig:
-        _required_keys(
+        data = Validator.as_dict(
             data,
-            ["init_method", "optimiser", "packing"],
-            "solver",
+            name="solver",
+            required_keys=["init_method", "optimiser"],
+            types=[str, dict],
+            reject_extra_keys=True,
         )
-
-        init_method = _string(
+        Validator.has(
             data["init_method"],
+            {"uniform", "lhs", "sobol"},
             name="solver.init_method",
-            allowed={"uniform", "lhs", "sobol"},
         )
 
-        optimiser = OptimiserConfig.from_dict(
-            _require_dict(
-                data["optimiser"],
-                "solver.optimiser",
-            )
-        )
-
-        packing = PackingConfig.from_dict(
-            _require_dict(
-                data["packing"],
-                "solver.packing",
-            )
-        )
-
-        return cls(
-            init_method=init_method,
-            optimiser=optimiser,
-            packing=packing,
-        )
+        return cls(**data)
 
 
 # ============================================================================
@@ -392,9 +222,9 @@ class ExportConfig:
 
     @classmethod
     def from_dict(cls, data: dict) -> ExportConfig:
-        _required_keys(
+        data = Validator.as_dict(
             data,
-            [
+            keys=[
                 "output_dir",
                 "as_array",
                 "formats",
@@ -403,92 +233,64 @@ class ExportConfig:
                 "image_dimensions",
                 "dpi",
             ],
-            "export",
+            types=[str, bool, Collection, int, int, Sequence, int],
+            name="export",
         )
 
-        output_dir = Validator.file_path(data["output_dir"])
-
-        as_array = _bool(
-            data["as_array"],
-            name="export.as_array",
-        )
-
-        formats = Validator.sequence(
-            data["formats"],
-            name="export.formats",
-            ele_type=str,
-            length=None,
-        )
-
-        allowed_formats = {
-            "png",
-            "jpg",
-            "pdf",
-            "json",
-            "pkl",
-            "yml",
-            "npz",
-        }
+        data["output_dir"] = Validator.dir_path(data["output_dir"], mkdir=True)
 
         invalid_formats = [
-            fmt for fmt in formats if fmt not in allowed_formats
+            fmt
+            for fmt in data["formats"]
+            if fmt not in ALLOWABLE_EXPORT_FORMATS
         ]
-
         if invalid_formats:
             raise ValueError(
                 f"Invalid export formats: {invalid_formats}. "
-                f"Allowed formats: {sorted(allowed_formats)}"
+                f"Allowed formats: {ALLOWABLE_EXPORT_FORMATS}"
             )
+        data["formats"] = tuple(data["formats"])
 
-        background = Validator.int(
+        data["background"] = Validator.as_int(
             data["background"],
             low=0,
             high=255,
             name="export.background",
         )
-
-        facecolor = Validator.int(
+        data["facecolor"] = Validator.as_int(
             data["facecolor"],
             low=0,
             high=255,
             name="export.facecolor",
         )
 
-        image_dimensions = Validator.sequence(
+        image_dimensions = Validator.as_sequence(
             data["image_dimensions"],
             name="export.image_dimensions",
             ele_type=int,
             length=2,
         )
 
-        image_dimensions = (
-            Validator.int(
+        data["image_dimensions"] = (
+            Validator.as_int(
                 image_dimensions[0],
                 low=1,
                 name="export.image_dimensions[0]",
             ),
-            Validator.int(
+            Validator.as_int(
                 image_dimensions[1],
                 low=1,
                 name="export.image_dimensions[1]",
             ),
         )
 
-        dpi = Validator.int(
+        data["dpi"] = Validator.as_int(
             data["dpi"],
             low=1,
             name="export.dpi",
         )
 
-        return cls(
-            output_dir=output_dir,
-            as_array=as_array,
-            formats=tuple(formats),
-            background=background,
-            facecolor=facecolor,
-            image_dimensions=image_dimensions,
-            dpi=dpi,
-        )
+        return cls(**data)
 
 
 # ============================================================================
@@ -498,67 +300,66 @@ class ExportConfig:
 
 @dataclass(frozen=True, slots=True)
 class ShapeForgeConfig:
+    num_cells: int
     metadata: MetadataConfig
     domain: DomainConfig
     shapes: tuple[ShapeConfig, ...]
+    packing: PackingConfig
     solver: SolverConfig
     export: ExportConfig
 
     @classmethod
     def from_dict(cls, data: dict) -> ShapeForgeConfig:
-        _required_keys(
+        data = Validator.as_dict(
             data,
-            [
+            name="ShapeForge Config",
+            required_keys=[
+                "num_cells",
                 "metadata",
                 "domain",
                 "shapes",
+                "packing",
                 "solver",
                 "export",
             ],
-            "configuration",
+            reject_extra_keys=True,
         )
-
-        metadata = MetadataConfig.from_dict(
-            _require_dict(data["metadata"], "metadata")
+        num_cells = Validator.as_int(
+            data["num_cells"], low=1, name="Number of cells"
         )
-
-        domain = DomainConfig.from_dict(
-            _require_dict(data["domain"], "domain")
-        )
-
-        raw_shapes = Validator.sequence(
-            data["shapes"],
-            name="shapes",
-        )
-
-        if len(raw_shapes) == 0:
-            raise ValueError("At least one shape must be specified")
-
-        shapes = tuple(
-            ShapeConfig.from_dict(_require_dict(shape, f"shapes[{index}]"))
-            for index, shape in enumerate(raw_shapes)
-        )
-
+        metadata = MetadataConfig.from_dict(data["metadata"])
+        solver = SolverConfig.from_dict(data["solver"])
+        export = ExportConfig.from_dict(data["export"])
+        domain = DomainConfig.from_dict(data["domain"])
+        packing = PackingConfig.from_dict(data["packing"])
+        raw_shapes = Validator.as_sequence(data["shapes"], min_length=1)
+        shapes = tuple(ShapeConfig.from_dict(shape) for shape in raw_shapes)
         total_volume_fraction = sum(shape.volume_fraction for shape in shapes)
-
         if total_volume_fraction > 1.0:
             raise ValueError(
                 "Total shape volume fraction must not exceed 1.0, "
                 f"but got {total_volume_fraction}"
             )
 
-        solver = SolverConfig.from_dict(
-            _require_dict(data["solver"], "solver")
-        )
-
-        export = ExportConfig.from_dict(
-            _require_dict(data["export"], "export")
-        )
-
         return cls(
+            num_cells=num_cells,
             metadata=metadata,
             domain=domain,
             shapes=shapes,
+            packing=packing,
             solver=solver,
             export=export,
         )
+
+    @classmethod
+    def from_(cls, source: dict | str | Path) -> ShapeForgeConfig:
+        if isinstance(source, (str, Path)):
+            data = _load_dict(source)
+        elif isinstance(source, dict):
+            data = source
+        else:
+            raise TypeError(
+                f"Invalid type '{type(source).__name__}' of source."
+                "Expecting a str or pathlib.Path or dict"
+            )
+        return cls.from_dict(data)

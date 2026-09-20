@@ -1,125 +1,58 @@
 import argparse
-import json
-import shutil
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from .cell import Cell, CellDomain, initialise_shapes
+from .cell import Cell2D, CellDomain2D, initialise_shapes_2d
 from .config import ShapeForgeConfig
-from .utils import _load_dict
+from .utils import get_logger
+
+logger = get_logger(__name__)
 
 
-def _generate_cell(
-    cfg: dict, get_init_cell: bool = False
-) -> Cell | tuple[Cell, Cell]:
-    # --------------------------------------------------------- #
-    #               Cell Initialization                         #
-    # --------------------------------------------------------- #
-    cell_domain = CellDomain.from_dict(cfg["domain"])
-    print("> Initialized the domain")
-    shapes = cfg.get("shapes", [])
-    if len(shapes) == 0:
-        print(
-            "WARNING: no shapes are found in the config, so returning "
-            "empty cell domain."
-        )
-        return Cell(cell_domain)  # just return the empty cell domain
-
-    shapes = initialise_shapes(
-        shapes,
-        cell_domain,
-        rng=np.random.default_rng(seed=cfg.get("rng_seed")),
-        init_method=cfg.get("engine", {}).get("init_method", "uniform"),
-    )
-    print("> Shapes are initialised in the domain.")
-    cell = Cell(cell_domain, shapes)
-    init_cell_copy = cell.clone()
-
-    # --------------------------------------------------------- #
-    #               Cell Optimisation                           #
-    # --------------------------------------------------------- #
-    cell.remove_inclusion_overlaps(
-        ssd_ratio=cfg.get("min_gap", 0.05),
-        proj_buffer_ratio=cfg.get("proj_buffer_ratio", 0.5),
-    )
-    print("> Cell generation completed!")
-
-    if get_init_cell:
-        return cell, init_cell_copy
-    return cell
-
-
-def generate_cell(config: dict[str, Any]) -> Cell:
+def generate_cell_2d(
+    config: dict[str, Any] | str | Path,
+) -> Sequence[tuple[Cell2D, Cell2D]]:
     """
     Generate a unit cell with the specified configuration.
     """
     print("Starting the cell genration...")
 
     cfg = ShapeForgeConfig.from_dict(config)
+    for index in range(cfg.num_cells):
+        rng_seed = cfg.metadata.rng_seed + index
+        logger.info(f"Generating cell {index} with seed {rng_seed}")
 
-    print("> Loaded the configuration")
-
-    verbose = int(config.get("verbose", 1))
-    export_options = config.get("export", {})
-    if not export_options:
-        raise ValueError("export options are required in the config.")
-    output_dir = export_options.get("output_dir")
-    if not output_dir:
-        raise ValueError(
-            "output_dir is required in export options for exporting."
+        cell_domain = CellDomain2D(bounds=cfg.domain.bounds)
+        shapes = initialise_shapes_2d(
+            cell_domain, cfg.shapes, rng=np.random.default_rng(seed=rng_seed)
         )
-    output_dir = Path(output_dir).resolve()
-    if output_dir.exists():
-        rm_output_dir = input(
-            "Output directory already exists. Remove it? (y/n): "
-        )
-        if rm_output_dir.lower() == "y":
-            shutil.rmtree(output_dir)
-    output_dir.mkdir(exist_ok=True, parents=True)
-    export_fmt = export_options.get("format", "png")
+        cell = Cell2D(cell_domain, shapes)
+        init_cell_copy = cell.clone()
 
-    if verbose > 10:
-        print("Generating the Cell with configuration:")
-        print(json.dumps(config, indent=4))
-
-    num_cells = config.get("num_cells", 1)
-    if not isinstance(num_cells, int) or num_cells < 1:
-        raise ValueError(
-            "num_cells should be an integer greater than or equal to 1."
+        cell.remove_inclusion_overlaps(
+            ssd_ratio=cfg.get("min_gap", 0.05),
+            proj_buffer_ratio=cfg.get("proj_buffer_ratio", 0.5),
         )
 
-    for i in range(num_cells):
-        config["rng_seed"] = config["rng_seed"] + i
-        if 0 < verbose < 10:
-            print(f"Generating cell {i} with seed {config['rng_seed']}")
-        cell = _generate_cell(config)
-
-        cell.save(
-            f_path=output_dir.joinpath(f"cell_{i}.{export_fmt}"),
-            plot_options=export_options.get("plot_with"),
-        )
-        # image_options = config.get("image", {})
-        # if image_options:
-        #     cell.plot(
-        #         f_path=output_dir.joinpath("final.png"),
-        #         shape_vis_options=image_options.get("shapes", {}),
-        #         domain_vis_options=image_options.get("domain", {}),
-        #         image_size=image_options.get("size", (256, 256)),
-        #     )
+        return cell, init_cell_copy
 
 
-def main():
+def build_parser() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=("ShapeForge CLI"))
     parser.add_argument(
         "config_file",
         type=str,
         help="Path to the YAML configuration file for the shape forge.",
     )
-    args = parser.parse_args()
-    config = _load_dict(args.config_file)
-    generate_cell(config)
+    return parser.parse_args()
+
+
+def main():
+    args = build_parser()
+    generate_cell_2d(args.config_file)
 
 
 if __name__ == "__main__":

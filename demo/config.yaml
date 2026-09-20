@@ -6,11 +6,11 @@
 # ----------------------------------------------------------------------------
 # Metadata & Execution
 # ----------------------------------------------------------------------------
+num_cells: 2
 metadata:
   project_name: "shapeforge-demo"
   rng_seed: 42
   log_level: info
-  num_cells: 2
 
 # ----------------------------------------------------------------------------
 # Spatial Domain Definition
@@ -36,6 +36,15 @@ shapes:
       radius: uniform(1, 0.1)
 
 # ----------------------------------------------------------------------------
+# Packing 
+# ----------------------------------------------------------------------------
+packing:
+  periodic: false
+  min_gap_ratio: 0.05
+  proj_buffer_ratio: 2.0
+  adjust_bounds_to_exact_vf: false
+
+# ----------------------------------------------------------------------------
 # Solver & Optimization Engine Configuration
 # ----------------------------------------------------------------------------
 solver:
@@ -45,11 +54,6 @@ solver:
     max_iter: 1000
     epsilon: 1.0e-6
 
-  packing:
-    periodic: false
-    min_gap_ratio: 0.05
-    proj_buffer_ratio: 2.0
-    adjust_bounds_to_exact_vf: false
 
 # ----------------------------------------------------------------------------
 # Export & Visualization Outputs

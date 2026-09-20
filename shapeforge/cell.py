@@ -1,157 +1,249 @@
-import math
 import json
-import pickle
+import math
+from collections import defaultdict
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence, Any
+from typing import Self
 
 import gbox as gb
-import matplotlib.pyplot as plt
 import numpy as np
-import yaml
 
-from .optim import nmspg, OptimisationProblem
-from .utils import _validate_dict, DistributionSampler
+from .config import ShapeConfig
+from .optim import OptimisationProblem, nmspg
+from .utils import DistributionSampler, DistributionSpec, Validator, get_logger
+
+logger = get_logger(__name__)
 
 
-class CellDomain:
+class CellDomain2D:
     """
-    It represents a domain for a cell, without any inclusions. It can be
+    It represents a 2D domain for a cell, without any inclusions. It can be
     considered as a host for inclusions or other geometrical features, but it
     does not contain any by itself.
     """
 
-    def __init__(self, bounds: Sequence):
-        self._bounds = bounds
-        self.domain = gb.BoundingBox(
-            lower_bound=(bounds[0], bounds[1]),
-            upper_bound=(bounds[2], bounds[3]),
-        )
+    __slots__ = ("_domain",)
+
+    def __init__(self, bounds: gb.Bounds2DRectangular | dict[str, float]):
+        if isinstance(bounds, gb.Bounds2DRectangular):
+            pass
+        if isinstance(bounds, Mapping):
+            bounds = gb.Bounds2DRectangular.from_mapping(bounds)
+        elif isinstance(bounds, Sequence):
+            bounds = gb.Bounds2DRectangular.from_sequence(bounds)
+        else:
+            raise TypeError(
+                "Invalid type for bounds. Expected gb.Bounds2DRectangular or "
+                f"Sequence or Mapping, but got {type(bounds).__name__}"
+            )
+        self._domain = bounds
+        logger.debug("> Initialised the `CellDomain2D`")
 
     @property
-    def bounds(self):
-        return self._bounds
+    def bounds(self) -> Mapping[str, float]:
+        return self._domain.bounds
 
     @property
     def x_bounds(self) -> tuple[float, float]:
         """
         Get the x bounds of the cell domain.
         """
-        return self._bounds[0], self._bounds[2]
+        return self._domain.x_min, self._domain.x_max
 
     @property
     def y_bounds(self) -> tuple[float, float]:
         """
         Get the y bounds of the cell domain.
         """
-        return self._bounds[1], self._bounds[3]
+        return self._domain.y_min, self._domain.y_max
 
     @property
-    def cell_volume(self) -> float:
+    def area(self) -> float:
         """
         Calculate the volume of the cell domain.
         """
-        return self.domain.volume
-
-    def plot(self, axs: plt.Axes, **kwargs):
-        return self.domain.plot(axs=axs, **kwargs)
+        return self._domain.area
 
     @classmethod
-    def from_dict(cls, config: dict[str, Any]) -> "CellDomain":
-        """
-        Create a CellDomain instance from a dictionary, with the following
-        structure:
+    def from_dict(cls, d: dict) -> Self:
+        d = Validator.as_dict(d, keys=["bounds"], types=[dict])
+        return cls(gb.Bounds2DRectangular.from_mapping(d["bounds"]))
 
-        ```py
-        # dict(shape=<name>, bounds=[x_min, y_min, x_max, y_max])
-        domain_config = dict(shape=rectangle, bounds=[0, 0, 20, 25])
-        ```
+    def to_dict(self) -> dict:
+        return {"bounds": dict(self._domain.bounds)}
 
-        Returns
-        -------
-        CellDomain
-            An instance of CellDomain initialized with the provided bounds.
-        """
-        _validate_dict(config, ["shape", "bounds"])
-        cell_shape = config["shape"]
-        cell_bounds = config["bounds"]
 
-        if cell_shape != "rectangle":
-            raise NotImplementedError(
-                f"Unsupported cell shape '{cell_shape}'. Only 'rectangle' is supported."
-            )
-        x_min, y_min, x_max, y_max = cell_bounds
+class Inclusions2D(Collection[gb.Shape2D]):
+    """
+    An unordered collection of geometric inclusions.It stores
+    ``gb.Shape2D`` instances.  It does not concern itself
+    with inclusions generation or sampling.
 
-        if x_min >= x_max or y_min >= y_max:
-            raise ValueError(
-                "Invalid bounds: x_min must be less than x_max and "
-                "y_min must be less than y_max."
-            )
+    Parameters
+    ----------
+    inclusions
+        Initial inclusions to add to the collection.
 
-        return cls(bounds=[x_min, y_min, x_max, y_max])
+    Examples
+    --------
+    >>> from gbox.shape import Circle, Ellipse
+    >>> inclusions = Inclusions2D([Circle(3.0), Circle(1.2)])
+    >>> inclusions.add(Circle(2.0))
+    >>> inclusions.add(Ellipse(2.0, 1.0))
+
+    The collection behaves like a collection:
+
+    >>> len(inclusions)
+    2
+    """
+
+    __slots__ = ("_inclusions",)
+
+    def __init__(self, inclusions: Iterable[gb.Shape2D] | None = None) -> None:
+        self._inclusions: list[gb.Shape2D] = []
+
+        if inclusions is not None:
+            self.extend(inclusions)
+
+    def __len__(self) -> int:
+        return len(self._inclusions)
+
+    def __iter__(self) -> Iterator[gb.Shape2D]:
+        return iter(self._inclusions)
+
+    def __contains__(self, inclusion: object) -> bool:
+        return inclusion in self._inclusions
+
+    def add(self, inclusion: gb.Shape2D) -> None:
+        """Add a single inclusion to the collection."""
+        Validator.is_type(inclusion, gb.Shape2D, name="inclusion")
+        self._inclusions.append(inclusion)
+
+    def extend(self, inclusions: Iterable[gb.Shape2D]) -> None:
+        """Add multiple inclusions to the collection."""
+        for inclusion in inclusions:
+            self.add(inclusion)
+
+    @property
+    def area(self) -> float:
+        """Total area occupied by the inclusions."""
+        return sum(inclusion.area for inclusion in self._inclusions)
+
+    def area_fraction(self, domain_area: float) -> float:
+        """Return the fraction of the domain occupied by the inclusions."""
+        if domain_area <= 0:
+            raise ValueError("domain_area must be greater than zero.")
+
+        return self.area / domain_area
+
+    def get_by_shape(self, shape: type[gb.Shape2D]) -> list[gb.Shape2D]:
+        """Return all inclusions of the specified shape type."""
+        return [
+            inclusion
+            for inclusion in self._inclusions
+            if isinstance(inclusion, shape)
+        ]
+
+    def get_count(self) -> dict[type[gb.Shape2D], int]:
+        """Return the number of inclusions of each shape type."""
+        counts: dict[type[gb.Shape2D], int] = defaultdict(int)
+
+        for inclusion in self._inclusions:
+            counts[type(inclusion)] += 1
+
+        return dict(counts)
+
+    def clear(self) -> None:
+        """Remove all inclusions from the collection."""
+        self._inclusions.clear()
+
+    def clone(self) -> Self:
+        """Create a deep copy of this instance."""
+        return self.__class__(self._inclusions)
+
+    def to_dict(self) -> dict:
+        return {
+            "inclusions": [
+                inclusion.to_dict() for inclusion in self._inclusions
+            ]
+        }
+
+    @classmethod
+    def from_dict(self, d: dict) -> Self:
+        d = Validator.as_dict(
+            d, key_type_map={"inclusions": Sequence}, reject_extra_keys=True
+        )
+        inclusions = [
+            gb.Shape2D.from_dict(inclusion) for inclusion in d["inclusions"]
+        ]
+        return self.__class__(inclusions)
 
 
 @dataclass
-class PositionSampler:
-    xc_sampler: DistributionSampler
-    yc_sampler: DistributionSampler
-    zc_sampler: DistributionSampler = None
-    azimuthal_angle_sampler: DistributionSampler = None
-    polar_angle_sampler: DistributionSampler = None
+class PositionSampler2D:
+    xc_sampler: DistributionSampler | None = None
+    yc_sampler: DistributionSampler | None = None
+    orientation_sampler: DistributionSampler | None = None
 
-    def sample(self) -> dict[str, float]:
-        out = dict(
-            xc=self.xc_sampler.sample(),
-            yc=self.yc_sampler.sample(),
-        )
-        if self.zc_sampler is not None:
-            out["zc"] = self.zc_sampler.sample()
-        if self.azimuthal_angle_sampler is not None:
-            out["azimuthal_angle"] = self.azimuthal_angle_sampler.sample()
-        if self.polar_angle_sampler is not None:
-            out["polar_angle"] = self.polar_angle_sampler.sample()
+    def sample(self) -> dict[str, float | gb.Angle]:
+        out = {}
+        if isinstance(self.xc_sampler, DistributionSampler):
+            out["xc"] = self.xc_sampler.sample()
+
+        if isinstance(self.yc_sampler, DistributionSampler):
+            out["yc"] = self.yc_sampler.sample()
+
+        if isinstance(self.orientation_sampler, DistributionSampler):
+            out["major_axis_angle"] = gb.Angle.rad(
+                self.orientation_sampler.sample()
+            )
 
         return out
 
 
-class InclusionSampler:
+class Inclusion2DSampler:
+    __slots__ = ("_pos_sampler", "_shape", "_size_samplers")
+
     def __init__(
         self,
-        shape: str | gb.GShape,
+        shape: str,
         pos_sampler: DistributionSampler,
-        size_samplers: dict[str, DistributionSampler],
+        size_samplers: dict[str, float | DistributionSampler],
     ):
-        g_shape = getattr(gb, shape) if isinstance(shape, str) else shape
+        shape = Validator.as_string(shape).lower()
+        gb_shape = gb.shapes.SHAPES_2D_MAPPING[shape]
 
-        if not issubclass(g_shape, gb.GShape):
-            raise ValueError(
-                f"Unsupported shape: {shape}, must be a subclass of gb.GShape"
-            )
         # check if g_shape has a method called from_params
-        if not callable(getattr(g_shape, "from_params")):
+        if not hasattr(gb_shape, "from_params") or not callable(
+            gb_shape.from_params
+        ):
             raise ValueError(
                 f"Unsupported shape: {shape}, must have a from_params method"
             )
 
-        self.shape: gb.GShape = g_shape
-        self.pos_sampler = pos_sampler
-        self.size_samplers = size_samplers
+        self._shape: gb.Shape2D = gb_shape
+        self._pos_sampler = pos_sampler
+        self._size_samplers = Validator.as_dict(size_samplers)
 
-    def sample(self) -> gb.GShape:
-        pos_params = self.pos_sampler.sample()
-        size_params = {k: v.sample() for k, v in self.size_samplers.items()}
-        return self.shape.from_params(
-            positional_params=pos_params, size_params=size_params
+    def sample(self) -> gb.Shape2D:
+        pos_params = self._pos_sampler.sample()
+        size_params = {}
+        for k, v in self._size_samplers.items():
+            if isinstance(v, (int, float)):
+                size_params[k] = v
+            else:
+                size_params[k] = v.sample()
+        return self._shape.from_params(
+            position_params=pos_params, size_params=size_params
         )
 
 
-def initialise_shapes(
-    shapes_params: dict | list[dict],
-    cell_domain: CellDomain,
-    *,
-    init_method: str = "uniform",
-    rng: Optional[np.random.Generator] = None,
-) -> dict[str, List[gb.GShape]]:
+def initialise_shapes_2d(
+    cell_domain: CellDomain2D,
+    shapes_config: Sequence[ShapeConfig],
+    rng: np.random.Generator,
+) -> Inclusions2D:
     """
     It is the main function to initialize inclusions based on the provided
     configuration. It iterates through the configuration list, extracting
@@ -161,40 +253,23 @@ def initialise_shapes(
 
     Parameters
     ----------
-    cell_domain : CellDomain
-        The cell domain in which the inclusions will be placed.
-    config : list[dict] | dict
-        A single dictionary or a list of dictionaries, each containing
-        configuration for a specific inclusion type. Each dictionary should
-        have the following keys:
-        - `name`: The shape of the inclusion (e.g., "circle", "ellipse").
-        - `vf`: The volume fraction of the inclusion.
-        - `params`: Additional parameters specific to the inclusion shape.
+    cell_domain : CellDomain2D
+        The 2D cell domain in which the inclusions will be placed.
+    shapes_config : Sequence[ShapeConfig]
+        A sequence of ShapeConfig objects, each containing the shape type,
+        volume fraction, and parameters for each inclusion type.
+    rng: np.random.Generator
+        A random number generator to ensure reproducibility.
 
     Returns
     -------
-    dict[str, list[gb.GShape]]
-        A dictionary where the keys are the shape names and the values are
-        lists of initialized inclusion objects of that shape.
+    Inclusions2D
+       A Inclusions2D object containing the initialized inclusions.
     """
-    if isinstance(shapes_params, dict):
-        shapes_params = [shapes_params]
-
-    non_dict_items = [nd for nd in shapes_params if not isinstance(nd, dict)]
-    if non_dict_items:
-        raise TypeError(
-            "Configuration must be a single dictionary or a list of "
-            f"dictionaries. Found non-dictionary items: {non_dict_items}."
-        )
-
-    # xc and yc distributions are not specified in the config,
     x_min, x_max = cell_domain.x_bounds
     y_min, y_max = cell_domain.y_bounds
-    if init_method != "uniform":
-        raise NotImplementedError(
-            f"Init method {init_method} for inclusions is not supported."
-        )
-    pos_sampler = PositionSampler(
+
+    pos_sampler = PositionSampler2D(
         xc_sampler=DistributionSampler.from_signature(
             f"uniform({x_min}, {x_max - x_min})", rng=rng
         ),
@@ -203,46 +278,48 @@ def initialise_shapes(
         ),
     )
 
-    initialised_inclusions: dict[str, List[gb.GShape]] = {}
+    inclusions = Inclusions2D()
     cum_vf = 0.0
-    for ith_incl_config in shapes_params:
-        name, vf, size_sampler_sigs = _validate_dict(
-            ith_incl_config,
-            keys=["name", "vf", "params"],
-            val_types=[str, float, dict],
-            val_ranges=[None, (0.0, 1.0), None],
-            ret_val=True,
-        )
-        cum_vf += vf
+    for a_shape_cfg in shapes_config:
+        cum_vf += a_shape_cfg.volume_fraction
         if cum_vf > 1.0:
             raise ValueError(
                 "Cumulative volume fraction of given shapes exceeds 1.0."
             )
-        size_samplers = {
-            p_name: DistributionSampler.from_signature(sig, rng=rng)
-            for p_name, sig in size_sampler_sigs.items()
-        }
 
-        # xy_sampler independent of shape
-        # params: dependent of shape
-        incl_sampler = InclusionSampler(
-            shape=name,
+        size_samplers = {}
+        for p_name, p_spec in a_shape_cfg.params.items():
+            if isinstance(p_name, (int, float)):
+                size_samplers[p_name] = p_spec
+            elif isinstance(p_name, DistributionSpec):
+                size_samplers[p_name] = DistributionSampler(p_spec, rng)
+            elif isinstance(p_name, str):
+                size_samplers[p_name] = DistributionSampler.from_signature(
+                    p_spec, rng
+                )
+            else:
+                raise TypeError(
+                    f"Invalid distribution spec type: {type(p_spec).__name__}"
+                )
+
+        incl_sampler = Inclusion2DSampler(
+            shape=a_shape_cfg.name,
             pos_sampler=pos_sampler,
             size_samplers=size_samplers,
         )
-        required_volume = cell_domain.cell_volume * vf
-        cumulative_volume = 0.0
-        generated_inclusions = []
-        while cumulative_volume < required_volume:
+
+        required_area = cell_domain.area * a_shape_cfg.volume_fraction
+        cumulative_area = 0.0
+
+        while cumulative_area < required_area:
             a_inclusion = incl_sampler.sample()
-            generated_inclusions.append(a_inclusion)
-            cumulative_volume += a_inclusion.volume()
+            inclusions.add(a_inclusion)
+            cumulative_area += a_inclusion.area()
 
-        initialised_inclusions[name] = generated_inclusions
-    return initialised_inclusions
+    return inclusions
 
 
-class CellCirclesOverlap(OptimisationProblem):
+class CellShapes2DOverlap(OptimisationProblem):
     """
     Overlap cost for a 2-D cell with circular inclusions, no periodicity.
 
@@ -261,8 +338,8 @@ class CellCirclesOverlap(OptimisationProblem):
 
     def __init__(
         self,
-        domain: CellDomain,
-        shapes: dict[str, list[gb.Circle]],
+        domain: CellDomain2D,
+        shapes: Inclusions2D,
         *,
         ssd_ratio: float = 0.05,
         proj_buffer_ratio: float = 2.0,
@@ -341,142 +418,84 @@ class CellCirclesOverlap(OptimisationProblem):
         return positions.flatten(order="F")
 
 
-class Cell:
-    def __init__(
-        self,
-        domain: CellDomain,
-        shapes: dict[str, List[gb.GShape]] = None,
-    ):
-        self.domain = domain
-        self.shapes = shapes
-        #
+class Cell2D:
+    __slots__ = ("_domain", "_opt_problem", "_shapes")
+
+    def __init__(self, domain: CellDomain2D, shapes: Inclusions2D):
+        self._domain = domain
+        self._shapes = shapes
         self._opt_problem = None
 
-    def clone(self) -> "Cell":
-        return Cell(self.domain, self.shapes)
+    @property
+    def domain(self) -> CellDomain2D:
+        return self._domain
 
-    def save(
-        self,
-        f_path: Path | str,
-        *,
-        plot_options: dict = None,
-    ) -> Path:
-        """
+    @property
+    def shapes(self) -> Inclusions2D:
+        return self._shapes
+
+    def clone(self) -> Self:
+        return self.__class__(self._domain, self._shapes)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Self:
+        d = Validator.as_dict(
+            d,
+            key_type_map={"domain": dict, "shapes": dict},
+            reject_extra_keys=True,
+            name="Cell2D.from_dict.d",
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "domain": self._domain.to_dict(),
+            "shapes": self._shapes.to_dict(),
+        }
+
+    def save(self, f_path: Path | str, *, overwrite: bool = False) -> Path:
+        """Save the configuration of the cell such that it can be loaded later.
 
         Parameters
         ----------
         f_path: str or Path
-            File path to save the cell. If not provided the cell will be saved
-            in the current directory with a default name.
+            Path to save the cell as a json file.
 
-        plot_options: dict, optional
-            Keyword arguments passed to the plot method, it may include:
-            
-            - `shape_facecolor`
-            - `shape_edgecolor`
-            - `bg_facecolor`
-            - `bg_edgecolor`
-            - `dpi`
-            - `size`
-
+        Returns
+        -------
+        Path
+            Path to the saved file.
         """
-        supported_file_types = {
-            ".json",
-            ".yaml",
-            ".yml",
-            ".pickle",
-            ".pkl",
-            ".png",
-            ".jpg",
-            ".jpeg",
-            ".pdf",
-        }
+        f_path = Validator.file_path(
+            f_path,
+            must_exist=None if overwrite else False,
+            extensions=[".json"],
+        )
+        with open(f_path, "w") as f:
+            json.dump(self.to_dict(), f, indent=4)
+        return f_path
 
-        f_path = Path(f_path)
-        if f_path.exists():
-            raise FileExistsError(f_path)
-        if f_path.suffix == "":
-            f_path = f_path.with_suffix(".json")
-
-        if f_path.suffix not in supported_file_types:
-            raise ValueError(
-                f"Unsupported file type: {f_path.suffix}. "
-                f"Supported file types are: {supported_file_types}."
-            )
-
-        if f_path.suffix == ".json":
-            with open(f_path, "w") as f:
-                json.dump(self.to_dict(), f, indent=4)
-            return f_path
-        elif f_path.suffix in (".yaml", ".yml"):
-            with open(f_path, "w") as f:
-                yaml.dump(self.to_dict(), f)
-            return f_path
-        elif f_path.suffix in (".pickle", ".pkl"):
-            with open(f_path, "wb") as f:
-                pickle.dump(self, f)
-            return f_path
-        elif f_path.suffix in (".png", ".jpg", ".jpeg", ".pdf"):
-            self.plot(f_path=f_path, **(plot_options or {}))
-            return f_path
-        elif f_path.suffix == ".npz":
-            raise NotImplementedError()
-        else:
-            raise ValueError(f"Unsupported file type: {f_path.suffix}")
-
-    def plot(
-        self,
-        shape_facecolor: str = "white",
-        shape_edgecolor: str = "black",
-        bg_facecolor: str = "black",
-        bg_edgecolor: str = "white",
-        size: tuple[int, int] = (256, 256),
-        dpi: int = 100,
-        as_array: bool = False,
-        f_path: Path | str | None = None,
-    ):
-        """
-        Plot the cell with its domain and inclusions.
+    @classmethod
+    def load(cls, f_path: str | Path) -> Self:
+        """Returns a new cell object with the configuration loaded from
+        a json file.
 
         Parameters
         ----------
-        ax : matplotlib.axes.Axes, optional
-            The axes to plot on. If None, a new axes will be created.
-        shape_options : dict, optional
-            Keyword arguments passed to the respective shape's
-            `plot` method.
-        domain_vis_options : dict, optional
-            Keyword arguments passed to the domain's `plot` method.
+        f_path: str | Path
+            Path to the json file containing the cell configuration.
+
+        Returns
+        -------
+        Cell2D
+            A new cell object with the configuration loaded from the json file.
         """
-        shapes_plotter = gb.utils.ShapesPlotter(
-            shape_options={
-                "facecolor": shape_facecolor,
-                "edgecolor": shape_edgecolor,
-            },
-            bg_options={
-                "edgecolor": bg_edgecolor,
-                "facecolor": bg_facecolor,
-                "bounds": self.domain.bounds,
-            },
-            image_options={
-                "dpi": dpi,
-                "size": size,
-                "mode": "L",
-                "dtype": "uint8",
-            },
+        f_path = Validator.file_path(
+            f_path, must_exist=True, extensions=[".json"]
         )
+        with open(f_path, "r") as f:
+            data = json.load(f)
 
-        for a_group_of_inclusions in self.shapes.values():
-            for a_inclusion in a_group_of_inclusions:
-                shapes_plotter.add_shape(a_inclusion)
-
-        shapes_plotter.saveas(f_path)
-        shapes_plotter.close()
-        # # TODO replace this custom axis formatting with a dedicated function
-        # axs.set_aspect("equal")
-        # axs.axis("off")
-        # axs.set_xlim(*self.domain.x_bounds)
-        # axs.set_ylim(*self.domain.y_bounds)
+        return cls.from_dict(data)
 
     def remove_inclusion_overlaps(self, ssd_ratio, proj_buffer_ratio) -> None:
         # Run Optim Loop to ensure there are no overlaps among inclusions
@@ -487,7 +506,7 @@ class Cell:
         #   Update the inclusions positions
         #   Check for convergence
         #   If converged, return the optimised inclusions positions
-        self._opt_problem = CellCirclesOverlap(
+        self._opt_problem = CellShapes2DOverlap(
             domain=self.domain,
             shapes=self.shapes,
             ssd_ratio=ssd_ratio,
@@ -509,7 +528,7 @@ class Cell:
         )
 
         positions = result.x_optimal.reshape(-1, 2, order="F")
-        for k, shapes_list in self.shapes.items():
+        for k, shapes_list in self._shapes.values():
             for idx, a_shape in enumerate(shapes_list):
                 a_shape.centre = gb.Point2D(
                     positions[idx, 0], positions[idx, 1]

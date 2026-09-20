@@ -1,7 +1,10 @@
 import json
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
+from typing import Self
 
 import numpy as np
 import numpy.typing as npt
@@ -12,16 +15,54 @@ from scipy import stats
 logger = get_logger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class DistributionSpec:
+    """
+    A dataclass to specify the distribution of a quantity.
+    """
+
+    distribution: str
+    loc: float
+    scale: float
+
+    def __post_init__(self):
+        Validator.as_float(self.scale, low=0.0, closed_bounds=False)
+
+        rv: stats.rv_continuous = getattr(stats, self.distribution, None)
+        if rv is None or not hasattr(rv, "rvs"):
+            raise ValueError(
+                f"Unsupported distribution: {self.distribution}. "
+                "Ensure it is a valid scipy.stats distribution."
+            )
+
+    def rvs_partial(self) -> Callable[[], float]:
+        rv: stats.rv_continuous = getattr(stats, self.distribution, None)
+        return partial(rv.rvs, loc=self.loc, scale=self.scale)
+
+    @classmethod
+    def from_signature(cls, sig: str) -> Self:
+        Validator.is_type(sig, str, name="Distribution Signature")
+        match = re.match(r"(\w+)\((.*)\)", sig)
+        if not match:
+            raise ValueError(
+                "Invalid signature: it must be in the form of"
+                "<method_name>(<loc>, <scale>). Example: uniform(2.0, 0.1)"
+            )
+        method = match.group(1)
+        loc, scale = [float(a.strip()) for a in match.group(2).split(",")]
+        return cls(method, loc, scale)
+
+
 class DistributionSampler:
     """
     A class to create a sampler for various distributions.
     """
 
+    __slots__ = ("_sampler",)
+
     def __init__(
         self,
-        method: str,
-        loc: float,
-        scale: float,
+        distribution_spec: DistributionSpec,
         rng: np.random.Generator | None = None,
         rvs_kwargs=None,
     ):
@@ -64,37 +105,16 @@ class DistributionSampler:
         ```
         """
 
-        rv: stats.rv_continuous = getattr(stats, method, None)
-        if rv is None or not hasattr(rv, "rvs"):
-            raise ValueError(
-                f"Unsupported distribution: {method}. "
-                "Ensure it is a valid scipy.stats distribution."
-            )
-
-        self.sampler = partial(
-            rv.rvs,
-            random_state=rng or np.random.default_rng(),
-            loc=loc,
-            scale=scale,
-            **(rvs_kwargs or {}),
+        rng = rng or np.random.default_rng()
+        rvs_kwargs = rvs_kwargs or {}
+        self._sampler = partial(
+            distribution_spec.rvs_partial(), random_state=rng, **rvs_kwargs
         )
 
     @classmethod
-    def from_signature(
-        cls, sig: str, rng=None, rvs_kwargs=None
-    ) -> "DistributionSampler":
-        if not isinstance(sig, str):
-            raise TypeError("Signature must be a string.")
-        match = re.match(r"(\w+)\((.*)\)", sig)
-        if not match:
-            raise ValueError(
-                "Invalid signature: it must be in the form of"
-                "<method_name>(<loc>, <scale>). Example: uniform(2.0, 0.1)"
-            )
-        method = match.group(1)
-        loc, scale = [float(a.strip()) for a in match.group(2).split(",")]
-
-        return cls(method, loc, scale, rng, rvs_kwargs)
+    def from_signature(cls, sig: str, rng=None, rvs_kwargs=None) -> Self:
+        distr_spec = DistributionSpec.from_signature(sig)
+        return cls(distr_spec, rng, rvs_kwargs)
 
     def sample(self, size: int = 1) -> npt.NDArray | float:
         """
@@ -112,8 +132,7 @@ class DistributionSampler:
             A list of samples from each distribution. If only one distribution
             is specified, returns a single array of samples.
         """
-        if not isinstance(size, int) or size < 1:
-            raise ValueError("Size must be a positive integer > 0.")
+        size = Validator.as_int(size, low=1, name="Sample Size")
         a = np.asarray(self.sampler(size=size))
         if size == 1:
             return a[0].item()
