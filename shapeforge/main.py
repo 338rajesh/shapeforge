@@ -18,9 +18,10 @@ def generate_cell_2d(
     """
     Generate a unit cell with the specified configuration.
     """
-    print("Starting the cell genration...")
+    logger.info("Starting the cell 2D genration...")
 
     cfg = ShapeForgeConfig.from_dict(config)
+    cells = [(None, None) for _ in range(cfg.num_cells)]
     for index in range(cfg.num_cells):
         rng_seed = cfg.metadata.rng_seed + index
         logger.info(f"Generating cell {index} with seed {rng_seed}")
@@ -30,14 +31,13 @@ def generate_cell_2d(
             cell_domain, cfg.shapes, rng=np.random.default_rng(seed=rng_seed)
         )
         cell = Cell2D(cell_domain, shapes)
-        init_cell_copy = cell.clone()
+        cells[index][0] = cell.clone()
 
         cell.remove_inclusion_overlaps(
             ssd_ratio=cfg.get("min_gap", 0.05),
             proj_buffer_ratio=cfg.get("proj_buffer_ratio", 0.5),
         )
-
-        return cell, init_cell_copy
+        cells[index][1] = cell
 
 
 def build_parser() -> argparse.Namespace:
