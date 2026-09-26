@@ -8,16 +8,22 @@ Available Algorithms
 
 from collections import deque
 from dataclasses import dataclass
-from typing import Optional, Literal
+from typing import Literal
 
 import numpy as np
+from gbox.core.utils import Validator
 
 
 class OptimisationProblem:
-    def __init__(self, params: Optional[dict] = None):
-        pass
-        self.params = params or {}
-        self.eval_count = {"f_and_g": 0, "proj": 0}
+    __slots__ = ("_eval_count", "_params", "_x0")
+
+    def __init__(self, params: dict | None = None):
+        self._x0: np.ndarray = None
+        self._params = params or {}
+        self._eval_count = {"f_and_g": 0, "proj": 0}
+        # self.params = params or {}
+        # self.x0 = np.array([0.0])  # Initial guess
+        # self.eval_count = {"f_and_g": 0, "proj": 0}
 
     def f_and_grad(self, x: np.ndarray) -> float:
         """
@@ -33,14 +39,21 @@ class OptimisationProblem:
         """
         raise NotImplementedError("Projection function not implemented.")
 
+    def solve(self, x0: np.ndarray, method: str = "nmspg", **options):
+        method = Validator.as_string(method).lower()
+        if method == "nmspg":
+            return nmspg(self, self.x0, **options)
+        else:
+            raise ValueError(f"Unknown optimisation method '{method}'")
 
-@dataclass
+
+@dataclass(slots=True, frozen=True)
 class OptimisationResult:
     x_optimal: np.ndarray
     status: Literal["success", "failure"] = "success"
-    failure_message: Optional[str] = None
-    f_history: Optional[list] = None
-    g_norm_history: Optional[list] = None
+    failure_message: str | None = None
+    f_history: list | None = None
+    g_norm_history: list | None = None
     iter_count: int = 0
     f_and_g_eval_count: int = 0
     proj_eval_count: int = 0

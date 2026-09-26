@@ -13,6 +13,7 @@ from gbox.core.utils import Validator, get_logger
 from scipy import stats
 
 logger = get_logger(__name__)
+PI = float(np.pi)
 
 
 @dataclass(frozen=True, slots=True)

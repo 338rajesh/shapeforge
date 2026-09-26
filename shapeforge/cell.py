@@ -1,5 +1,4 @@
 import json
-import math
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -10,13 +9,20 @@ import gbox as gb
 import numpy as np
 
 from .config import ShapeConfig
-from .optim import OptimisationProblem, nmspg
 from .utils import DistributionSampler, DistributionSpec, Validator, get_logger
 
 logger = get_logger(__name__)
 
 
-class CellDomain2D:
+class CellDomain:
+    pass
+
+
+class Inclusions(Collection[gb.Shape2D]):
+    pass
+
+
+class CellDomain2D(CellDomain):
     """
     It represents a 2D domain for a cell, without any inclusions. It can be
     considered as a host for inclusions or other geometrical features, but it
@@ -74,7 +80,7 @@ class CellDomain2D:
         return {"bounds": dict(self._domain.bounds)}
 
 
-class Inclusions2D(Collection[gb.Shape2D]):
+class Inclusions2D(Inclusions):
     """
     An unordered collection of geometric inclusions.It stores
     ``gb.Shape2D`` instances.  It does not concern itself
@@ -178,6 +184,39 @@ class Inclusions2D(Collection[gb.Shape2D]):
             gb.Shape2D.from_dict(inclusion) for inclusion in d["inclusions"]
         ]
         return self.__class__(inclusions)
+
+    def get_positions(self, flat: bool = False) -> np.ndarray:
+        """Returns a numpy array of shape (N, 3) where N is the number of
+        inclusions and each row contains x, y and orientation (in radians)
+        of the shape in the 2D plane. If ``flat`` is True, an array of shape
+        ``(3N, )`` will be returned where the first N elements are the x,
+        next N elements are the y and the last N elements are the
+        orientations.
+        """
+        positions = np.array(
+            [inclusion.position.to_tuple() for inclusion in self._inclusions]
+        )
+        return positions.flatten() if flat else positions
+
+    def get_equivalent_circle_radii(self) -> np.ndarray:
+        return np.array([i.equivalent_circle_radius for i in self])
+
+    def get_bbox_overlap_pairs(self) -> set[tuple[int, int]]:
+        """Returns a set of 2-tuples (i, j) where i > j and the bounding
+        boxes of inclusions i and j overlap.
+        """
+        n = len(self)
+        # overlap_matrix = np.zeros((n, n), dtype=int)
+        overlappping_pairs = set()
+        for i in range(n):
+            for j in range(n):
+                if i <= j:
+                    continue
+                if self._inclusions[i].bounding_box.overlaps(
+                    self._inclusions[j].bounding_box
+                ):
+                    overlappping_pairs.add((i, j))
+        return overlappping_pairs
 
 
 @dataclass
@@ -319,111 +358,12 @@ def initialise_shapes_2d(
     return inclusions
 
 
-class CellShapes2DOverlap(OptimisationProblem):
-    """
-    Overlap cost for a 2-D cell with circular inclusions, no periodicity.
-
-    Parameters
-    ----------
-    domain : CellDomain
-    shapes : dict[str, list[gb.GShape]]
-        Output of ``initialise_shapes``; all shapes must be circles.
-    ssd_ratio : float
-        Minimum surface-to-surface gap as a fraction of each circle's
-        radius.  Default 0.04 (4 %).
-    proj_buffer_ratio : float
-        Projection buffer thickness = proj_buffer_ratio × radius.
-        Default 2.0 (mirrors Julia default).
-    """
-
-    def __init__(
-        self,
-        domain: CellDomain2D,
-        shapes: Inclusions2D,
-        *,
-        ssd_ratio: float = 0.05,
-        proj_buffer_ratio: float = 2.0,
-    ):
-        super().__init__()
-        self.domain = domain
-        self.shapes = shapes
-
-        self._inclusions: list[gb.Circle] = []
-        for g in shapes.values():
-            self._inclusions.extend(g)
-        self._num_inclusions = len(self._inclusions)
-
-        self.x0 = [i.centre.x for i in self._inclusions] + [
-            i.centre.y for i in self._inclusions
-        ]
-        self._radii = np.array([i.radius for i in self._inclusions])
-        self._ssd = ssd_ratio * self._radii
-        self._proj_buffer = proj_buffer_ratio * self._radii
-
-    def _overlap_cost_and_gradient(self, positions: np.ndarray):
-        xs, ys = positions.T
-
-        cost = 0.0
-        grad_x = np.zeros(self._num_inclusions)
-        grad_y = np.zeros(self._num_inclusions)
-
-        for i in range(self._num_inclusions):
-            for j in range(1 + i, self._num_inclusions):
-                dx = xs[i] - xs[j]
-                dy = ys[i] - ys[j]
-                dist = math.hypot(dx, dy)
-
-                dca = self._radii[i] + self._radii[j] + self._ssd[i]
-                c = dca - dist
-
-                if c > 0.0:
-                    dol = c / (dist + 1e-6)  # degree of overlap
-
-                    cost += c * c  # making convex
-
-                    tmp_gx = dol * dx
-                    tmp_gy = dol * dy
-                    grad_x[i] += tmp_gx
-                    grad_x[j] -= tmp_gx
-                    grad_y[i] += tmp_gy
-                    grad_y[j] -= tmp_gy
-
-        grad = -2.0 * np.column_stack([grad_x, grad_y])
-        return cost, grad
-
-    def f_and_grad(self, x: np.ndarray) -> tuple[float, np.ndarray]:
-        positions = x.reshape(-1, 2, order="F")  # x, y
-        f, g = self._overlap_cost_and_gradient(positions)
-        self.eval_count["f_and_g"] += 1
-        return f, g.flatten(order="F")
-
-    def projection(self, x: np.ndarray) -> np.ndarray:
-        positions = x.reshape(-1, 2, order="F")
-        xlb, xub = self.domain.x_bounds
-        ylb, yub = self.domain.y_bounds
-
-        for i in range(self._num_inclusions):
-            buf_len = self._proj_buffer[i] * np.random.random()
-            if positions[i, 0] > xub:
-                positions[i, 0] = xub - buf_len
-            elif positions[i, 0] < xlb:
-                positions[i, 0] = xlb + buf_len
-
-            if positions[i, 1] > yub:
-                positions[i, 1] = yub - buf_len
-            elif positions[i, 1] < ylb:
-                positions[i, 1] = ylb + buf_len
-
-        self.eval_count["proj"] += 1
-        return positions.flatten(order="F")
-
-
-class Cell2D:
+class Cell:
     __slots__ = ("_domain", "_opt_problem", "_shapes")
 
-    def __init__(self, domain: CellDomain2D, shapes: Inclusions2D):
-        self._domain = domain
-        self._shapes = shapes
+    def __init__(self, domain: CellDomain, shapes: Inclusions):
+        self._domain = None
+        self._shapes = None
         self._opt_problem = None
 
     @property
@@ -443,8 +383,9 @@ class Cell2D:
             d,
             key_type_map={"domain": dict, "shapes": dict},
             reject_extra_keys=True,
-            name="Cell2D.from_dict.d",
+            name=f"{cls.__name__}.from_dict.d",
         )
+        return cls(d["domain"], d["shapes"])
 
     def to_dict(self) -> dict:
         return {
@@ -497,39 +438,44 @@ class Cell2D:
 
         return cls.from_dict(data)
 
-    def remove_inclusion_overlaps(self, ssd_ratio, proj_buffer_ratio) -> None:
-        # Run Optim Loop to ensure there are no overlaps among inclusions
-        #   Evaluate the cost function and gradients
-        #     Add Periodic copies, if required
-        #     cost evaluation
-        #     gradients evaluation
-        #   Update the inclusions positions
-        #   Check for convergence
-        #   If converged, return the optimised inclusions positions
-        self._opt_problem = CellShapes2DOverlap(
-            domain=self.domain,
-            shapes=self.shapes,
-            ssd_ratio=ssd_ratio,
-            proj_buffer_ratio=proj_buffer_ratio,
-        )
-        result = nmspg(
-            objective=self._opt_problem,
-            x0=self._opt_problem.x0,
-            iter_max=100,
-            iter_memory=10,
-            epsilon=1e-6,
-            spectral_step_min=1e-30,
-            spectral_step_max=1e30,
-            gamma=0.0001,
-            sigma1=0.1,
-            sigma2=0.9,
-            ls_iter_max=20,
-            p_bar=None,
-        )
 
-        positions = result.x_optimal.reshape(-1, 2, order="F")
-        for k, shapes_list in self._shapes.values():
-            for idx, a_shape in enumerate(shapes_list):
-                a_shape.centre = gb.Point2D(
-                    positions[idx, 0], positions[idx, 1]
-                )
+# class Cell2D(Cell):
+#     def __init__(self, domain: CellDomain2D, shapes: Inclusions2D):
+#         super().__init__(domain, shapes)
+
+# def remove_inclusion_overlaps(self, ssd_ratio, proj_buffer_ratio) -> None:
+#     # Run Optim Loop to ensure there are no overlaps among inclusions
+#     #   Evaluate the cost function and gradients
+#     #     Add Periodic copies, if required
+#     #     cost evaluation
+#     #     gradients evaluation
+#     #   Update the inclusions positions
+#     #   Check for convergence
+#     #   If converged, return the optimised inclusions positions
+#     self._opt_problem = CellShapes2DOverlap(
+#         domain=self.domain,
+#         shapes=self.shapes,
+#         ssd_ratio=ssd_ratio,
+#         proj_buffer_ratio=proj_buffer_ratio,
+#     )
+#     result = nmspg(
+#         objective=self._opt_problem,
+#         x0=self._opt_problem.x0,
+#         iter_max=100,
+#         iter_memory=10,
+#         epsilon=1e-6,
+#         spectral_step_min=1e-30,
+#         spectral_step_max=1e30,
+#         gamma=0.0001,
+#         sigma1=0.1,
+#         sigma2=0.9,
+#         ls_iter_max=20,
+#         p_bar=None,
+#     )
+
+#     positions = result.x_optimal.reshape(-1, 2, order="F")
+#     for k, shapes_list in self._shapes.values():
+#         for idx, a_shape in enumerate(shapes_list):
+#             a_shape.centre = gb.Point2D(
+#                 positions[idx, 0], positions[idx, 1]
+#             )
