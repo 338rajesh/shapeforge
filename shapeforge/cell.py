@@ -34,6 +34,10 @@ class CellDomain(ABC):
             )
         self._bounds = bounds
 
+    @property
+    def bounds(self) -> gb.Bounds:
+        return gb.Bounds.from_mapping(self._bounds.bounds)
+
 
 class Inclusions(Collection[gb.Shape2D]):
     pass
@@ -50,8 +54,8 @@ class CellDomain2D(CellDomain):
         super().__init__(bounds)
 
     @property
-    def bounds(self) -> tuple[float, float, float, float]:
-        return self._bounds.bounds
+    def bounds(self) -> gb.Bounds2DRectangular:
+        return gb.Bounds2DRectangular.from_mapping(self._bounds.bounds)
 
     @property
     def x_bounds(self) -> tuple[float, float]:

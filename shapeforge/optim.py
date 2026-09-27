@@ -15,15 +15,11 @@ from gbox.core.utils import Validator
 
 
 class OptimisationProblem:
-    __slots__ = ("_eval_count", "_params", "_x0")
+    __slots__ = ("_eval_count", "_eval_count", "_x0")
 
-    def __init__(self, params: dict | None = None):
+    def __init__(self):
         self._x0: np.ndarray = None
-        self._params = params or {}
         self._eval_count = {"f_and_g": 0, "proj": 0}
-        # self.params = params or {}
-        # self.x0 = np.array([0.0])  # Initial guess
-        # self.eval_count = {"f_and_g": 0, "proj": 0}
 
     def get_trial_state(self, shift: np.ndarray) -> None:
         """Return the new state of the optimisation problem."""
@@ -138,7 +134,7 @@ def nmspg(
         """
         x_trial = x_ - ssl_ * g_
         d_ = objective.projection(x_trial) - x_
-        objective.eval_count["proj"] += 1
+        objective._eval_count["proj"] += 1
         return d_
 
     def d_inf_norm(x_: np.ndarray, g_: np.ndarray, ssl_: float = 1.0) -> bool:
@@ -269,6 +265,6 @@ def nmspg(
         f_history=f_history,
         g_norm_history=g_norm_history,
         iter_count=k,
-        f_and_g_eval_count=objective.eval_count["f_and_g"],
-        proj_eval_count=objective.eval_count["proj"],
+        f_and_g_eval_count=objective._eval_count["f_and_g"],
+        proj_eval_count=objective._eval_count["proj"],
     )

@@ -14,6 +14,7 @@ class ShapesOverlap(OptimisationProblem):
         *,
         buffer_thickness_ratio: float = 0.05,
     ):
+        super().__init__()
         self.num_inclusions = len(shapes)
         self.x0 = shapes.get_positions(flat=True)
 
@@ -24,7 +25,7 @@ class ShapesOverlap(OptimisationProblem):
         return x.flatten(order="F")
 
     def _as_matrix(self, x: np.ndarray) -> np.ndarray:
-        return x.reshape(self.num_inclusions, 3, order="F")
+        return x.reshape(self.num_inclusions, -1, order="F")
 
 
 class CellShapes2DOverlap(ShapesOverlap):
@@ -97,23 +98,23 @@ class CellShapes2DOverlap(ShapesOverlap):
                     ith_circles_array = self._uns[i]
                     jth_circles_array = self._uns[j]
 
-                    for k_xc, k_yc, k_r in enumerate(ith_circles_array):
-                        for l_xc, l_yc, l_r in enumerate(jth_circles_array):
-                            dx_ik_jl = k_xc - l_xc
-                            dy_ik_jl = k_yc - l_yc
+                    for circle_k in ith_circles_array:
+                        for circle_l in jth_circles_array:
+                            dx_ik_jl = circle_k.centre[0] - circle_l.centre[0]
+                            dy_ik_jl = circle_k.centre[1] - circle_l.centre[1]
                             distance_ik_jl = np.hypot(dx_ik_jl, dy_ik_jl)
                             min_distance_ik_jl = (
-                                k_r
-                                + l_r
+                                circle_k.radius
+                                + circle_l.radius
                                 + self._shapes_buffer_thickness[i]
                                 + self._shapes_buffer_thickness[j]
                             )
                             c_ik_jl = min_distance_ik_jl - distance_ik_jl
                             if c_ik_jl > 1e-06:
-                                dx_i_ik = xs[i] - k_xc
-                                dy_i_ik = ys[i] - k_yc
-                                dx_j_jl = xs[j] - l_xc
-                                dy_j_jl = ys[j] - l_yc
+                                dx_i_ik = xs[i] - circle_k.centre[0]
+                                dy_i_ik = ys[i] - circle_k.centre[1]
+                                dx_j_jl = xs[j] - circle_l.centre[0]
+                                dy_j_jl = ys[j] - circle_l.centre[1]
 
                                 cost += c_ik_jl * c_ik_jl
                                 if distance_ik_jl > 1e-06:
@@ -136,7 +137,7 @@ class CellShapes2DOverlap(ShapesOverlap):
                                     (dx_ik_jl * dy_j_jl) - (dy_ik_jl * dx_j_jl)
                                 )
 
-        grad = -2.0 * np.column_stack([grad_x, grad_y])
+        grad = -2.0 * np.column_stack([grad_x, grad_y, grad_o])
         return cost, grad
 
     def get_trial_state(self, x, shift):
@@ -166,22 +167,25 @@ class CellShapes2DOverlap(ShapesOverlap):
                 )
 
         f, g = self._overlap_cost_and_gradient(xyo, uns=uns)
-        self.eval_count["f_and_g"] += 1
+        self._eval_count["f_and_g"] += 1
         return f, self._as_flat(g)
 
     def projection(self, x: np.ndarray) -> np.ndarray:
         positions = self._as_matrix(x)  # -> (N, 3) shaped matrix
-        xlb, xub = self.domain
-        ylb, yub = self.domain.y_bounds
+        bounds = self.domain.bounds.to_dict()
+        xlb, xub = bounds['x_min'], bounds['x_max']
+        ylb, yub = bounds['y_min'], bounds['y_max']
+        
         olb, oub = 0.0, 2.0 * PI
 
         for i in range(self.num_inclusions):
-            buf_len = self._proj_buffer[i] * np.random.random()
+            buf_len = 0.2 * (xub - xlb) * np.random.random()
             if positions[i, 0] > xub:
                 positions[i, 0] = xub - buf_len
             elif positions[i, 0] < xlb:
                 positions[i, 0] = xlb + buf_len
 
+            buf_len = 0.2 * (yub - ylb) * np.random.random()
             if positions[i, 1] > yub:
                 positions[i, 1] = yub - buf_len
             elif positions[i, 1] < ylb:
@@ -192,5 +196,5 @@ class CellShapes2DOverlap(ShapesOverlap):
             elif positions[i, 2] < olb:
                 positions[i, 2] = olb
 
-        self.eval_count["proj"] += 1
+        self._eval_count["proj"] += 1
         return self._as_flat(positions)
