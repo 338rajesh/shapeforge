@@ -41,7 +41,10 @@ class DistributionSpec:
         return partial(rv.rvs, loc=self.loc, scale=self.scale)
 
     @classmethod
-    def from_signature(cls, sig: str) -> Self:
+    def from_signature(cls, sig: str | Self) -> Self:
+        if isinstance(sig, cls):
+            return sig
+        
         Validator.is_type(sig, str, name="Distribution Signature")
         match = re.match(r"(\w+)\((.*)\)", sig)
         if not match:
@@ -134,7 +137,7 @@ class DistributionSampler:
             is specified, returns a single array of samples.
         """
         size = Validator.as_int(size, low=1, name="Sample Size")
-        a = np.asarray(self.sampler(size=size))
+        a = np.asarray(self._sampler(size=size))
         if size == 1:
             return a[0].item()
         return a

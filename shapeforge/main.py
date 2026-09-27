@@ -9,7 +9,7 @@ from gbox.shapes.shapes_2d import Shape2DPose
 from .cell import Cell, CellDomain2D, initialise_shapes_2d
 from .config import ShapeForgeConfig
 from .overlap_optim import CellShapes2DOverlap
-from .utils import get_logger
+from .utils import _load_dict, get_logger
 
 logger = get_logger(__name__)
 
@@ -21,8 +21,8 @@ def generate_cell_2d(
     Generate a unit cell with the specified configuration.
     """
     logger.info("Starting the cell 2D genration...")
-
-    cfg = ShapeForgeConfig.from_dict(config)
+    config_dict = _load_dict(config)
+    cfg = ShapeForgeConfig.from_dict(config_dict)
     cells: list[tuple[Cell, Cell]] = [
         (None, None) for _ in range(cfg.num_cells)
     ]
@@ -44,15 +44,23 @@ def generate_cell_2d(
         logger.info(f"Generating cell {index} with seed {rng_seed}")
 
         cell_domain = CellDomain2D(bounds=cfg.domain.bounds)
+        logger.debug("  Domain of cell is created")
+
         shapes = initialise_shapes_2d(
             cell_domain, cfg.shapes, rng=np.random.default_rng(seed=rng_seed)
         )
+        logger.debug("  Shapes of cell are created & initialised")
+
         cell = Cell(cell_domain, shapes)
+        logger.debug("  Cell object containing shapes and domain is created")
+
         initial_copy = cell.clone()
+        initial_copy.plot(f_path="test.png")
+        logger.debug("  A copy of the cell is created for comparison")
 
         # Solving the overlap
         overlap_problem = CellShapes2DOverlap(
-            cell.domain, cell.shapes, ssd_ratio=0.05, proj_buffer_ratio=2.0
+            cell.domain, cell.shapes, buffer_thickness_ratio=0.05
         )
         solution = overlap_problem.solve(**solver_options)
 
@@ -66,17 +74,26 @@ def generate_cell_2d(
 
 
 def build_parser() -> argparse.Namespace:
+    _log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
     parser = argparse.ArgumentParser(description=("ShapeForge CLI"))
     parser.add_argument(
         "config_file",
         type=str,
         help="Path to the YAML configuration file for the shape forge.",
     )
+    parser.add_argument(
+        "--log",
+        default="WARNING",
+        choices=_log_levels + list(map(str.lower, _log_levels)),
+        help="Set the logging level (default: WARNING)",
+    )
     return parser.parse_args()
 
 
 def main():
     args = build_parser()
+    logger.setLevel(args.log.upper())
     generate_cell_2d(args.config_file)
 
 

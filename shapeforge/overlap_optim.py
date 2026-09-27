@@ -1,4 +1,5 @@
 import numpy as np
+from gbox import CirclesArray
 
 from .cell import CellDomain, CellDomain2D, Inclusions, Inclusions2D
 from .optim import OptimisationProblem
@@ -16,11 +17,14 @@ class ShapesOverlap(OptimisationProblem):
         self.num_inclusions = len(shapes)
         self.x0 = shapes.get_positions(flat=True)
 
+        self.shapes = shapes
+        self.domain = domain
+
     def _as_flat(self, x: np.ndarray) -> np.ndarray:
         return x.flatten(order="F")
 
     def _as_matrix(self, x: np.ndarray) -> np.ndarray:
-        return x.reshape(self._num_inclusions, 3, order="F")
+        return x.reshape(self.num_inclusions, 3, order="F")
 
 
 class CellShapes2DOverlap(ShapesOverlap):
@@ -59,22 +63,25 @@ class CellShapes2DOverlap(ShapesOverlap):
             equivalent_circle_radii * buffer_thickness_ratio
         )
 
+        self._x_prev = None
+
     def _get_bbox_overlap_matrix(self) -> np.ndarray:
         # use `uns` to get the overlap matrix of all shape combinations
         bbox_overla_matrix = np.zeros(
             (self.num_inclusions, self.num_inclusions), dtype=np.bool
         )
-        for i, ith_uns in enumerate(self._uns):
-            for j, jth_uns in enumerate(self._uns):
-                bbox_overla_matrix[i, j] = ith_uns.bounding_box.overlaps(
-                    jth_uns.bounding_box
+        for i in range(self.num_inclusions):
+            for j in range(self.num_inclusions):
+                bbox_overla_matrix[i, j] = self._uns[i].bounding_box.overlaps(
+                    self._uns[j].bounding_box
                 )
         return bbox_overla_matrix
 
-    def _update_uns(self):
-        return
-
-    def _overlap_cost_and_gradient(self, positions: np.ndarray):
+    def _overlap_cost_and_gradient(
+        self,
+        positions: np.ndarray,
+        uns: list[CirclesArray],
+    ):
         xs, ys, _ = positions.T
 
         cost = 0.0
@@ -132,25 +139,43 @@ class CellShapes2DOverlap(ShapesOverlap):
         grad = -2.0 * np.column_stack([grad_x, grad_y])
         return cost, grad
 
+    def get_trial_state(self, x, shift):
+        # Update UnS
+        shift_matrix = self._as_matrix(shift)
+        for i, a_uns in enumerate(self._uns):
+            a_uns.centres.transform(
+                dx=shift_matrix[i, 0], dy=shift_matrix[i, 1], in_place=True
+            )
+        return np.add(x, shift)
+
     def f_and_grad(
-        self, x: np.ndarray, update_uns: bool = False
+        self, x: np.ndarray, x_prev: np.ndarray | None = None
     ) -> tuple[float, np.ndarray]:
-        positions = self._as_matrix(x)
+        xyo = self._as_matrix(x)
+        uns = self._uns
+        if isinstance(x_prev, np.ndarray):
+            xyo_prev = self._as_matrix(x_prev)
+            for i in range(self.num_inclusions):
+                dx, dy, dt = xyo[i] - xyo_prev[i]
+                uns[i].centres.transform(
+                    dx=dx,
+                    dy=dy,
+                    angle=dt,
+                    in_place=True,
+                    pivot=(xyo_prev[0], xyo_prev[1]),
+                )
 
-        if update_uns:
-            self._update_uns()
-
-        f, g = self._overlap_cost_and_gradient(positions)
+        f, g = self._overlap_cost_and_gradient(xyo, uns=uns)
         self.eval_count["f_and_g"] += 1
         return f, self._as_flat(g)
 
     def projection(self, x: np.ndarray) -> np.ndarray:
         positions = self._as_matrix(x)  # -> (N, 3) shaped matrix
-        xlb, xub = self.domain.x_bounds
+        xlb, xub = self.domain
         ylb, yub = self.domain.y_bounds
         olb, oub = 0.0, 2.0 * PI
 
-        for i in range(self._num_inclusions):
+        for i in range(self.num_inclusions):
             buf_len = self._proj_buffer[i] * np.random.random()
             if positions[i, 0] > xub:
                 positions[i, 0] = xub - buf_len

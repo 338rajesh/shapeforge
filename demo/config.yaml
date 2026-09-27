@@ -8,7 +8,7 @@
 # ----------------------------------------------------------------------------
 num_cells: 2
 metadata:
-  project_name: "shapeforge-demo"
+  title: shapeforge-demo
   rng_seed: 42
   log_level: info
 
@@ -39,7 +39,7 @@ shapes:
 # Packing 
 # ----------------------------------------------------------------------------
 packing:
-  periodic: false
+  periodicity: false
   min_gap_ratio: 0.05
   proj_buffer_ratio: 2.0
   adjust_bounds_to_exact_vf: false

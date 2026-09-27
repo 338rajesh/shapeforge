@@ -153,13 +153,12 @@ class PackingConfig:
         data = Validator.as_dict(
             data,
             name="Packing",
-            keys=[
-                "min_gap_ratio",
-                "periodicity",
-                "proj_buffer_ratio",
-                "adjust_bounds_to_exact_vf",
-            ],
-            types=[float, bool, float, bool],
+            key_type_map={
+                "min_gap_ratio": float,
+                "periodicity": bool,
+                "proj_buffer_ratio": float,
+                "adjust_bounds_to_exact_vf": bool,
+            },
             reject_extra_keys=True,
         )
         data["min_gap_ratio"] = Validator.as_float(
@@ -192,8 +191,10 @@ class SolverConfig:
         data = Validator.as_dict(
             data,
             name="solver",
-            required_keys=["init_method", "optimiser"],
-            types=[str, dict],
+            key_type_map={
+                "init_method": str,
+                "optimiser": dict,
+            },
             reject_extra_keys=True,
         )
         Validator.has(
@@ -313,15 +314,15 @@ class ShapeForgeConfig:
         data = Validator.as_dict(
             data,
             name="ShapeForge Config",
-            required_keys=[
-                "num_cells",
-                "metadata",
-                "domain",
-                "shapes",
-                "packing",
-                "solver",
-                "export",
-            ],
+            key_type_map={
+                "num_cells": int,
+                "metadata": dict,
+                "domain": dict,
+                "shapes": list,
+                "packing": dict,
+                "solver": dict,
+                "export": dict,
+            },
             reject_extra_keys=True,
         )
         num_cells = Validator.as_int(

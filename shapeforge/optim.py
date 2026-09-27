@@ -25,7 +25,11 @@ class OptimisationProblem:
         # self.x0 = np.array([0.0])  # Initial guess
         # self.eval_count = {"f_and_g": 0, "proj": 0}
 
-    def f_and_grad(self, x: np.ndarray) -> float:
+    def get_trial_state(self, shift: np.ndarray) -> None:
+        """Return the new state of the optimisation problem."""
+        raise NotImplementedError("`get_new_state` method not implemented.")
+
+    def f_and_grad(self, x: np.ndarray, *args, **kwargs) -> float:
         """
         Evaluate the objective function and its gradient
         """
@@ -39,7 +43,7 @@ class OptimisationProblem:
         """
         raise NotImplementedError("Projection function not implemented.")
 
-    def solve(self, x0: np.ndarray, method: str = "nmspg", **options):
+    def solve(self, method: str = "nmspg", **options):
         method = Validator.as_string(method).lower()
         if method == "nmspg":
             return nmspg(self, self.x0, **options)
@@ -203,7 +207,7 @@ def nmspg(
         slope_local = np.dot(g_k, d_k)
         while True:
             x_trial = x_k + alpha * d_k
-            f_trial, _ = objective.f_and_grad(x_trial)
+            f_trial, _ = objective.f_and_grad(x_trial, x_k)
 
             # terminate if reached the max number of line search iterations
             if ls_iter >= ls_iter_max:

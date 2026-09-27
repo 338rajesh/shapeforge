@@ -1,4 +1,5 @@
 import json
+from abc import ABC
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -14,8 +15,24 @@ from .utils import DistributionSampler, DistributionSpec, Validator, get_logger
 logger = get_logger(__name__)
 
 
-class CellDomain:
-    pass
+class CellDomain(ABC):
+    __slots__ = ("_bounds",)
+
+    def __init__(
+        self, bounds: Mapping[str, float] | Sequence[float] | gb.Bounds
+    ):
+        if isinstance(bounds, gb.Bounds):
+            pass
+        elif isinstance(bounds, Mapping):
+            bounds = gb.Bounds.from_mapping(bounds)
+        elif isinstance(bounds, Sequence):
+            bounds = gb.Bounds.from_sequence(bounds)
+        else:
+            raise TypeError(
+                f"bounds must be a gb.Bounds, or a Mapping or a Sequence, "
+                f"not {type(bounds).__name__}"
+            )
+        self._bounds = bounds
 
 
 class Inclusions(Collection[gb.Shape2D]):
@@ -29,47 +46,38 @@ class CellDomain2D(CellDomain):
     does not contain any by itself.
     """
 
-    __slots__ = ("_domain",)
-
     def __init__(self, bounds: gb.Bounds2DRectangular | dict[str, float]):
-        if isinstance(bounds, gb.Bounds2DRectangular):
-            pass
-        if isinstance(bounds, Mapping):
-            bounds = gb.Bounds2DRectangular.from_mapping(bounds)
-        elif isinstance(bounds, Sequence):
-            bounds = gb.Bounds2DRectangular.from_sequence(bounds)
-        else:
-            raise TypeError(
-                "Invalid type for bounds. Expected gb.Bounds2DRectangular or "
-                f"Sequence or Mapping, but got {type(bounds).__name__}"
-            )
-        self._domain = bounds
-        logger.debug("> Initialised the `CellDomain2D`")
+        super().__init__(bounds)
 
     @property
-    def bounds(self) -> Mapping[str, float]:
-        return self._domain.bounds
+    def bounds(self) -> tuple[float, float, float, float]:
+        return self._bounds.bounds
 
     @property
     def x_bounds(self) -> tuple[float, float]:
         """
         Get the x bounds of the cell domain.
         """
-        return self._domain.x_min, self._domain.x_max
+        return self._bounds.x_min, self._bounds.x_max
 
     @property
     def y_bounds(self) -> tuple[float, float]:
         """
         Get the y bounds of the cell domain.
         """
-        return self._domain.y_min, self._domain.y_max
+        return self._bounds.y_min, self._bounds.y_max
 
     @property
     def area(self) -> float:
         """
         Calculate the volume of the cell domain.
         """
-        return self._domain.area
+        return self._bounds.area
+
+    @property
+    def domain(self) -> gb.Bounds2DRectangular:
+        """Returns the ``gb.Bounds2DRectangular`` object"""
+        return self._bounds
 
     @classmethod
     def from_dict(cls, d: dict) -> Self:
@@ -77,7 +85,7 @@ class CellDomain2D(CellDomain):
         return cls(gb.Bounds2DRectangular.from_mapping(d["bounds"]))
 
     def to_dict(self) -> dict:
-        return {"bounds": dict(self._domain.bounds)}
+        return {"bounds": dict(self._bounds.bounds)}
 
 
 class Inclusions2D(Inclusions):
@@ -353,7 +361,7 @@ def initialise_shapes_2d(
         while cumulative_area < required_area:
             a_inclusion = incl_sampler.sample()
             inclusions.add(a_inclusion)
-            cumulative_area += a_inclusion.area()
+            cumulative_area += a_inclusion.area
 
     return inclusions
 
@@ -362,8 +370,8 @@ class Cell:
     __slots__ = ("_domain", "_opt_problem", "_shapes")
 
     def __init__(self, domain: CellDomain, shapes: Inclusions):
-        self._domain = None
-        self._shapes = None
+        self._domain: CellDomain = domain
+        self._shapes: Inclusions = shapes
         self._opt_problem = None
 
     @property
@@ -438,44 +446,11 @@ class Cell:
 
         return cls.from_dict(data)
 
-
-# class Cell2D(Cell):
-#     def __init__(self, domain: CellDomain2D, shapes: Inclusions2D):
-#         super().__init__(domain, shapes)
-
-# def remove_inclusion_overlaps(self, ssd_ratio, proj_buffer_ratio) -> None:
-#     # Run Optim Loop to ensure there are no overlaps among inclusions
-#     #   Evaluate the cost function and gradients
-#     #     Add Periodic copies, if required
-#     #     cost evaluation
-#     #     gradients evaluation
-#     #   Update the inclusions positions
-#     #   Check for convergence
-#     #   If converged, return the optimised inclusions positions
-#     self._opt_problem = CellShapes2DOverlap(
-#         domain=self.domain,
-#         shapes=self.shapes,
-#         ssd_ratio=ssd_ratio,
-#         proj_buffer_ratio=proj_buffer_ratio,
-#     )
-#     result = nmspg(
-#         objective=self._opt_problem,
-#         x0=self._opt_problem.x0,
-#         iter_max=100,
-#         iter_memory=10,
-#         epsilon=1e-6,
-#         spectral_step_min=1e-30,
-#         spectral_step_max=1e30,
-#         gamma=0.0001,
-#         sigma1=0.1,
-#         sigma2=0.9,
-#         ls_iter_max=20,
-#         p_bar=None,
-#     )
-
-#     positions = result.x_optimal.reshape(-1, 2, order="F")
-#     for k, shapes_list in self._shapes.values():
-#         for idx, a_shape in enumerate(shapes_list):
-#             a_shape.centre = gb.Point2D(
-#                 positions[idx, 0], positions[idx, 1]
-#             )
+    def plot(self, f_path: str | Path, **kwargs) -> None:
+        """Plots the cell and saves the plot to specified file."""
+        sp = gb.ShapesPlotter(**kwargs)
+        sp.plot(
+            shapes=[i for i in self.shapes],
+            bounds=self.domain.domain,
+            path=f_path,
+        )
