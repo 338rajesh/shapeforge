@@ -13,6 +13,8 @@ from .utils import _load_dict, get_logger
 
 logger = get_logger(__name__)
 
+SCRATCH_DIR = Path("/home/rajesh/workshop/repos/shapeforge/scratch")
+
 
 def generate_cell_2d(
     config: dict[str, Any] | str | Path,
@@ -55,7 +57,7 @@ def generate_cell_2d(
         logger.debug("  Cell object containing shapes and domain is created")
 
         initial_copy = cell.clone()
-        initial_copy.plot(f_path="test.png")
+        initial_copy.plot(f_path=SCRATCH_DIR.joinpath(f"initial_{index}.png"))
         logger.debug("  A copy of the cell is created for comparison")
 
         # Solving the overlap
@@ -64,10 +66,19 @@ def generate_cell_2d(
         )
         solution = overlap_problem.solve(**solver_options)
 
+        print(
+            f"status: {solution.status}, \n"
+            f"iter count: {solution.iter_count}, \n"
+            f"iter count: {solution.iter_count}, \n"
+            f"F history: {solution.f_history}"
+        )
+
         # Updating the shapes with the optimal positions
         positions = solution.x_optimal.reshape(len(shapes), 3, order="F")
         for idx, a_shape in enumerate(shapes):
             a_shape.position = Shape2DPose(*positions[idx])
+
+        cell.plot(f_path=SCRATCH_DIR.joinpath(f"final_{index}.png"))
 
         cells[index] = (initial_copy, cell)
     return cells

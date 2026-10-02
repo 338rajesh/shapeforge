@@ -1,5 +1,5 @@
 import numpy as np
-from gbox import CirclesArray
+from gbox import Angle, CirclesArray
 
 from .cell import CellDomain, CellDomain2D, Inclusions, Inclusions2D
 from .optim import OptimisationProblem
@@ -66,15 +66,16 @@ class CellShapes2DOverlap(ShapesOverlap):
 
         self._x_prev = None
 
-    def _get_bbox_overlap_matrix(self) -> np.ndarray:
+    def _get_bbox_overlap_matrix(self, uns=None) -> np.ndarray:
+        uns = uns or self._uns
         # use `uns` to get the overlap matrix of all shape combinations
         bbox_overla_matrix = np.zeros(
-            (self.num_inclusions, self.num_inclusions), dtype=np.bool
+            (self.num_inclusions, self.num_inclusions), dtype=np.bool_
         )
         for i in range(self.num_inclusions):
-            for j in range(self.num_inclusions):
-                bbox_overla_matrix[i, j] = self._uns[i].bounding_box.overlaps(
-                    self._uns[j].bounding_box
+            for j in range(1 + i, self.num_inclusions):
+                bbox_overla_matrix[i, j] = uns[i].bounding_box.overlaps(
+                    uns[j].bounding_box
                 )
         return bbox_overla_matrix
 
@@ -90,19 +91,24 @@ class CellShapes2DOverlap(ShapesOverlap):
         grad_y = np.zeros(self.num_inclusions)
         grad_o = np.zeros(self.num_inclusions)
 
-        bb_overlap_matrix = self._get_bbox_overlap_matrix()
+        bb_overlap_matrix = self._get_bbox_overlap_matrix(uns)
 
+        num_bbox_overlaps = 0
+        num_circle_overlaps = 0
         for i in range(self.num_inclusions):
             for j in range(1 + i, self.num_inclusions):
                 if bb_overlap_matrix[i, j]:  # Proceed only if bbox overlaps
-                    ith_circles_array = self._uns[i]
-                    jth_circles_array = self._uns[j]
-
-                    for circle_k in ith_circles_array:
-                        for circle_l in jth_circles_array:
+                    num_bbox_overlaps += 1
+                    for circle_k in uns[i]:
+                        for circle_l in uns[j]:
                             dx_ik_jl = circle_k.centre[0] - circle_l.centre[0]
                             dy_ik_jl = circle_k.centre[1] - circle_l.centre[1]
-                            distance_ik_jl = np.hypot(dx_ik_jl, dy_ik_jl)
+
+                            distance_ik_jl = float(
+                                np.sqrt(
+                                    dx_ik_jl * dx_ik_jl + dy_ik_jl * dy_ik_jl
+                                )
+                            )
                             min_distance_ik_jl = (
                                 circle_k.radius
                                 + circle_l.radius
@@ -110,14 +116,16 @@ class CellShapes2DOverlap(ShapesOverlap):
                                 + self._shapes_buffer_thickness[j]
                             )
                             c_ik_jl = min_distance_ik_jl - distance_ik_jl
-                            if c_ik_jl > 1e-06:
+                            if c_ik_jl > 0.0:
+                                num_circle_overlaps += 1
                                 dx_i_ik = xs[i] - circle_k.centre[0]
                                 dy_i_ik = ys[i] - circle_k.centre[1]
                                 dx_j_jl = xs[j] - circle_l.centre[0]
                                 dy_j_jl = ys[j] - circle_l.centre[1]
 
                                 cost += c_ik_jl * c_ik_jl
-                                if distance_ik_jl > 1e-06:
+
+                                if abs(distance_ik_jl) >= 1e-06:
                                     overlap_degree = c_ik_jl / distance_ik_jl
                                 else:
                                     overlap_degree = c_ik_jl / (
@@ -137,45 +145,42 @@ class CellShapes2DOverlap(ShapesOverlap):
                                     (dx_ik_jl * dy_j_jl) - (dy_ik_jl * dx_j_jl)
                                 )
 
+        num_overlaps = int(np.triu(bb_overlap_matrix, k=1).sum())
+        print(
+            f"Total Number of bbox overlaps: {num_overlaps}; "
+            f"number of circle overlaps: {num_circle_overlaps}, "
+            f"number of actual bbox overlaps: {num_bbox_overlaps}"
+            f"Cost: {cost}"
+        )
         grad = -2.0 * np.column_stack([grad_x, grad_y, grad_o])
         return cost, grad
-
-    def get_trial_state(self, x, shift):
-        # Update UnS
-        shift_matrix = self._as_matrix(shift)
-        for i, a_uns in enumerate(self._uns):
-            a_uns.centres.transform(
-                dx=shift_matrix[i, 0], dy=shift_matrix[i, 1], in_place=True
-            )
-        return np.add(x, shift)
 
     def f_and_grad(
         self, x: np.ndarray, x_prev: np.ndarray | None = None
     ) -> tuple[float, np.ndarray]:
         xyo = self._as_matrix(x)
-        uns = self._uns
+        uns_trial = self._uns
         if isinstance(x_prev, np.ndarray):
             xyo_prev = self._as_matrix(x_prev)
             for i in range(self.num_inclusions):
-                dx, dy, dt = xyo[i] - xyo_prev[i]
-                uns[i].centres.transform(
-                    dx=dx,
-                    dy=dy,
-                    angle=dt,
-                    in_place=True,
-                    pivot=(xyo_prev[0], xyo_prev[1]),
+                xi_prev, yi_prev, oi_prev = xyo_prev[i]
+                uns_trial[i] = uns_trial[i].transform(
+                    dx=xyo[i, 0] - xi_prev,
+                    dy=xyo[i, 1] - yi_prev,
+                    rot_angle=Angle.rad(xyo[i, 2] - oi_prev),
+                    pivot=(float(xi_prev), float(yi_prev)),
                 )
 
-        f, g = self._overlap_cost_and_gradient(xyo, uns=uns)
+        f, g = self._overlap_cost_and_gradient(xyo, uns=uns_trial)
         self._eval_count["f_and_g"] += 1
         return f, self._as_flat(g)
 
     def projection(self, x: np.ndarray) -> np.ndarray:
         positions = self._as_matrix(x)  # -> (N, 3) shaped matrix
         bounds = self.domain.bounds.to_dict()
-        xlb, xub = bounds['x_min'], bounds['x_max']
-        ylb, yub = bounds['y_min'], bounds['y_max']
-        
+        xlb, xub = bounds["x_min"], bounds["x_max"]
+        ylb, yub = bounds["y_min"], bounds["y_max"]
+
         olb, oub = 0.0, 2.0 * PI
 
         for i in range(self.num_inclusions):

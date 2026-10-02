@@ -15,15 +15,11 @@ from gbox.core.utils import Validator
 
 
 class OptimisationProblem:
-    __slots__ = ("_eval_count", "_eval_count", "_x0")
+    __slots__ = ("_eval_count", "_x0")
 
     def __init__(self):
         self._x0: np.ndarray = None
         self._eval_count = {"f_and_g": 0, "proj": 0}
-
-    def get_trial_state(self, shift: np.ndarray) -> None:
-        """Return the new state of the optimisation problem."""
-        raise NotImplementedError("`get_new_state` method not implemented.")
 
     def f_and_grad(self, x: np.ndarray, *args, **kwargs) -> float:
         """
@@ -60,7 +56,6 @@ class OptimisationResult:
 
     def __post_init__(self):
         n = self.iter_count
-        self.x_optimal = np.array(self.x_optimal)
         if self.f_history and (not len(self.f_history) == n + 1):
             raise ValueError("Length of f_history must match iter_count.")
         if self.g_norm_history and (not len(self.g_norm_history) == n + 1):
@@ -68,7 +63,7 @@ class OptimisationResult:
 
     def to_dict(self) -> dict:
         return {
-            "x_optimal": self.x_optimal,
+            "x_optimal": self.x_optimal.tolist(),
             "iter_count": self.iter_count,
             "f_and_g_eval_count": self.f_and_g_eval_count,
             "f_history": self.f_history,
@@ -259,10 +254,10 @@ def nmspg(
         )
 
     return OptimisationResult(
-        x_optimal=x_k.tolist(),
+        x_optimal=np.asarray(x_k),
         status=status,
         failure_message=failure_message,
-        f_history=f_history,
+        f_history=[float(i) for i in f_history],
         g_norm_history=g_norm_history,
         iter_count=k,
         f_and_g_eval_count=objective._eval_count["f_and_g"],
