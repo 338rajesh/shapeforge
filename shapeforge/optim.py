@@ -178,6 +178,7 @@ def nmspg(
     failure_message = None
     ssl_k = get_init_ssl(x_k, g_k)
     while k < iter_max:
+
         # --------------------------------------------
         #       Check convergence
         # --------------------------------------------
@@ -185,7 +186,7 @@ def nmspg(
             status = "success"
             break
 
-        if p_bar is not None:
+        if p_bar:
             print(f"Iteration {k + 1}/{iter_max}, f: {f_k:.6f}", end="\r")
 
         # --------------------------------------------

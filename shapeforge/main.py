@@ -39,7 +39,7 @@ def generate_cell_2d(
         "sigma1": 0.1,
         "sigma2": 0.9,
         "ls_iter_max": 20,
-        "p_bar": None,
+        "p_bar": True,
     }
     for index in range(cfg.num_cells):
         rng_seed = cfg.metadata.rng_seed + index
@@ -62,26 +62,37 @@ def generate_cell_2d(
 
         # Solving the overlap
         overlap_problem = CellShapes2DOverlap(
-            cell.domain, cell.shapes, buffer_thickness_ratio=0.05
+            cell.domain, cell.shapes.clone(), buffer_thickness_ratio=0.05
         )
+
+        _x0 = overlap_problem.x0
+        import json
+
+        with open(SCRATCH_DIR.joinpath(f"x0_{index}.json"), "w") as f:
+            json.dump(
+                {
+                    "x0_flat": _x0.tolist(),
+                    "x0_matrix": overlap_problem._as_matrix(_x0).tolist(),
+                },
+                f,
+                indent=4,
+            )
+
         solution = overlap_problem.solve(**solver_options)
 
         print(
-            f"status: {solution.status}, \n"
-            f"iter count: {solution.iter_count}, \n"
-            f"iter count: {solution.iter_count}, \n"
-            f"F history: {solution.f_history}"
+            f"status: {solution.status}, \t iter count: {solution.iter_count}"
         )
 
         # Updating the shapes with the optimal positions
-        positions = solution.x_optimal.reshape(len(shapes), 3, order="F")
+        positions = overlap_problem._as_matrix(solution.x_optimal)
         for idx, a_shape in enumerate(shapes):
-            a_shape.position = Shape2DPose(*positions[idx])
+            a_shape.position = Shape2DPose(*positions[idx], 0.0)
 
         cell.plot(f_path=SCRATCH_DIR.joinpath(f"final_{index}.png"))
-        cell.save(
-            f_path=SCRATCH_DIR.joinpath(f"final_{index}.json"), overwrite=True
-        )
+        # cell.save(
+        #     f_path=SCRATCH_DIR.joinpath(f"final_{index}.json"), overwrite=True
+        # )
         plot_f_and_g_norms(
             sol=solution,
             f_path=SCRATCH_DIR.joinpath(f"fg_variation_{index}.png"),

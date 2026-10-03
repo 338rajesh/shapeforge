@@ -190,12 +190,14 @@ def plot_f_and_g_norms(sol, f_path: Path | None = None):
         ax[0].legend()
         ax[0].set_xlabel("Iteration")
         ax[0].set_ylabel("Function Values")
+        ax[0].set_yscale('log')
     if g_hist is not None:
         n = list(range(len(g_hist)))
         ax[1].plot(n, g_hist, color='k', label="Gradient Norms")
         ax[1].legend()
         ax[1].set_xlabel("Iteration")
         ax[1].set_ylabel("Gradient Norms")
+        ax[1].set_yscale('log')
     if f_path is not None:
         fig.savefig(f_path)
     else:

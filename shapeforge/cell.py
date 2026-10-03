@@ -89,6 +89,9 @@ class CellDomain2D(CellDomain):
 
 
 class Inclusions(Collection[gb.Shape2D]):
+    def get_positions(self, flat: bool = False) -> np.ndarray:
+        pass
+
     def set_positions(self, x_new: np.ndarray):
         """Sets the positions of the inclusions.
 
@@ -211,9 +214,12 @@ class Inclusions2D(Inclusions):
         orientations.
         """
         positions = np.array(
-            [inclusion.position.to_tuple() for inclusion in self._inclusions]
+            [
+                inclusion.position.point.tolist()
+                for inclusion in self._inclusions
+            ]
         )
-        return positions.flatten() if flat else positions
+        return positions.flatten(order="F") if flat else positions
 
     def set_positions(self, xyo: np.ndarray) -> None:
         """Sets the positions of the inclusions. The input array should
@@ -221,9 +227,9 @@ class Inclusions2D(Inclusions):
         contains x, y and orientation (in radians)
         """
         num_inclusions = len(self)
-        if xyo.shape != (num_inclusions, 3):
+        if xyo.shape != (num_inclusions, 2):
             raise ValueError(
-                f"Expected an array of shape ({num_inclusions, 3}), "
+                f"Expected an array of shape ({num_inclusions, 2}), "
                 f"Got {xyo.shape}"
             )
         for i in range(num_inclusions):
@@ -231,7 +237,7 @@ class Inclusions2D(Inclusions):
                 {
                     "x": xyo[i, 0],
                     "y": xyo[i, 1],
-                    "orientation": gb.Angle.rad(xyo[i, 2]),
+                    "orientation": gb.Angle.rad(0.0),
                 }
             )
 
