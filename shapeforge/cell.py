@@ -39,10 +39,6 @@ class CellDomain(ABC):
         return gb.Bounds.from_mapping(self._bounds.bounds)
 
 
-class Inclusions(Collection[gb.Shape2D]):
-    pass
-
-
 class CellDomain2D(CellDomain):
     """
     It represents a 2D domain for a cell, without any inclusions. It can be
@@ -90,6 +86,15 @@ class CellDomain2D(CellDomain):
 
     def to_dict(self) -> dict:
         return {"bounds": dict(self._bounds.bounds)}
+
+
+class Inclusions(Collection[gb.Shape2D]):
+    def set_positions(self, x_new: np.ndarray):
+        """Sets the positions of the inclusions.
+
+        ***All the angles must be in radians.***
+        """
+        raise NotImplementedError("Subclasses must implement this method")
 
 
 class Inclusions2D(Inclusions):
@@ -209,6 +214,26 @@ class Inclusions2D(Inclusions):
             [inclusion.position.to_tuple() for inclusion in self._inclusions]
         )
         return positions.flatten() if flat else positions
+
+    def set_positions(self, xyo: np.ndarray) -> None:
+        """Sets the positions of the inclusions. The input array should
+        have shape (N, 3) where N is the number of inclusions and each row
+        contains x, y and orientation (in radians)
+        """
+        num_inclusions = len(self)
+        if xyo.shape != (num_inclusions, 3):
+            raise ValueError(
+                f"Expected an array of shape ({num_inclusions, 3}), "
+                f"Got {xyo.shape}"
+            )
+        for i in range(num_inclusions):
+            self._inclusions[i].position = gb.shapes_2d.Shape2DPose.from_dict(
+                {
+                    "x": xyo[i, 0],
+                    "y": xyo[i, 1],
+                    "orientation": gb.Angle.rad(xyo[i, 2]),
+                }
+            )
 
     def get_equivalent_circle_radii(self) -> np.ndarray:
         return np.array([i.equivalent_circle_radius for i in self])
@@ -340,11 +365,11 @@ def initialise_shapes_2d(
 
         size_samplers = {}
         for p_name, p_spec in a_shape_cfg.params.items():
-            if isinstance(p_name, (int, float)):
+            if isinstance(p_spec, (int, float)):
                 size_samplers[p_name] = p_spec
-            elif isinstance(p_name, DistributionSpec):
+            elif isinstance(p_spec, DistributionSpec):
                 size_samplers[p_name] = DistributionSampler(p_spec, rng)
-            elif isinstance(p_name, str):
+            elif isinstance(p_spec, str):
                 size_samplers[p_name] = DistributionSampler.from_signature(
                     p_spec, rng
                 )

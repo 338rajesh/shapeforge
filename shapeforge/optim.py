@@ -29,6 +29,11 @@ class OptimisationProblem:
             "Objective function and gradient evaluation not implemented. "
         )
 
+    def update_x(self, x_new: np.ndarray) -> None:
+        raise NotImplementedError(
+            "Sub-classes must implement method to update the position"
+        )
+
     def projection(self, x: np.ndarray) -> np.ndarray:
         """
         Projection onto the feasible set.
@@ -236,6 +241,7 @@ def nmspg(
         # ---------------------------------------------
         #       Update variables for the next iteration
         # ---------------------------------------------
+        objective.update_x(x_kp1)
         x_k = x_kp1
         f_k = f_trial
         g_k = g_kp1

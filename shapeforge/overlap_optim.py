@@ -58,7 +58,7 @@ class CellShapes2DOverlap(ShapesOverlap):
         equivalent_circle_radii = shapes.get_equivalent_circle_radii()
 
         # Evaluate UnS
-        self._uns = [a_shape.union_of_circles() for a_shape in shapes]
+        # self._uns = [a_shape.union_of_circles() for a_shape in shapes]
 
         self._shapes_buffer_thickness = (
             equivalent_circle_radii * buffer_thickness_ratio
@@ -66,8 +66,12 @@ class CellShapes2DOverlap(ShapesOverlap):
 
         self._x_prev = None
 
-    def _get_bbox_overlap_matrix(self, uns=None) -> np.ndarray:
-        uns = uns or self._uns
+    def update_x(self, x_new: np.ndarray):
+        x_new = self._as_matrix(x_new)
+        self.shapes.set_positions(x_new)
+
+    def _get_bbox_overlap_matrix(self, uns: list[CirclesArray]) -> np.ndarray:
+        # uns = uns or self._uns
         # use `uns` to get the overlap matrix of all shape combinations
         bbox_overla_matrix = np.zeros(
             (self.num_inclusions, self.num_inclusions), dtype=np.bool_
@@ -93,65 +97,53 @@ class CellShapes2DOverlap(ShapesOverlap):
 
         bb_overlap_matrix = self._get_bbox_overlap_matrix(uns)
 
-        num_bbox_overlaps = 0
-        num_circle_overlaps = 0
         for i in range(self.num_inclusions):
+            ixc, iyc = xs[i], ys[i]
+
             for j in range(1 + i, self.num_inclusions):
+                jxc, jyc = xs[j], ys[j]
+
                 if bb_overlap_matrix[i, j]:  # Proceed only if bbox overlaps
-                    num_bbox_overlaps += 1
                     for circle_k in uns[i]:
+                        kxc, kyc = circle_k.centre
+                        kr = circle_k.radius
+                        k_buff_t = self._shapes_buffer_thickness[i]
                         for circle_l in uns[j]:
-                            dx_ik_jl = circle_k.centre[0] - circle_l.centre[0]
-                            dy_ik_jl = circle_k.centre[1] - circle_l.centre[1]
+                            lxc, lyc = circle_l.centre
+                            lr = circle_l.radius
+                            l_buff_t = self._shapes_buffer_thickness[j]
 
-                            distance_ik_jl = float(
-                                np.sqrt(
-                                    dx_ik_jl * dx_ik_jl + dy_ik_jl * dy_ik_jl
-                                )
-                            )
-                            min_distance_ik_jl = (
-                                circle_k.radius
-                                + circle_l.radius
-                                + self._shapes_buffer_thickness[i]
-                                + self._shapes_buffer_thickness[j]
-                            )
-                            c_ik_jl = min_distance_ik_jl - distance_ik_jl
-                            if c_ik_jl > 0.0:
-                                num_circle_overlaps += 1
-                                dx_i_ik = xs[i] - circle_k.centre[0]
-                                dy_i_ik = ys[i] - circle_k.centre[1]
-                                dx_j_jl = xs[j] - circle_l.centre[0]
-                                dy_j_jl = ys[j] - circle_l.centre[1]
+                            dx_ikjl = kxc - lxc
+                            dy_ikjl = kyc - lyc
 
-                                cost += c_ik_jl * c_ik_jl
+                            distance_ikjl = float(np.hypot(dx_ikjl, dy_ikjl))
+                            min_distance_ik_jl = kr + lr + k_buff_t + l_buff_t
 
-                                if abs(distance_ik_jl) >= 1e-06:
-                                    overlap_degree = c_ik_jl / distance_ik_jl
-                                else:
-                                    overlap_degree = c_ik_jl / (
-                                        distance_ik_jl + 1e-06
-                                    )
+                            c_ikjl = min_distance_ik_jl - distance_ikjl
 
-                                temp_grad_x = overlap_degree * dx_ik_jl
-                                temp_grad_y = overlap_degree * dy_ik_jl
+                            if c_ikjl > 0.0:  # actual_distance < min_distance
+                                dx_iik = ixc - kxc
+                                dy_iik = iyc - kyc
+                                dx_jjl = jxc - lxc
+                                dy_jjl = jyc - lyc
+
+                                cost += c_ikjl * c_ikjl
+
+                                eps = 1e-06 if distance_ikjl < 1e-06 else 0.0
+                                overlap_degree = c_ikjl / (distance_ikjl + eps)
+
+                                temp_grad_x = overlap_degree * dx_ikjl
+                                temp_grad_y = overlap_degree * dy_ikjl
                                 grad_x[i] += temp_grad_x
                                 grad_x[j] -= temp_grad_x
                                 grad_y[i] += temp_grad_y
                                 grad_y[j] -= temp_grad_y
                                 grad_o[i] += overlap_degree * (
-                                    (dx_ik_jl * dy_i_ik) - (dy_ik_jl * dx_i_ik)
+                                    (dx_ikjl * dy_iik) - (dy_ikjl * dx_iik)
                                 )
                                 grad_o[j] -= overlap_degree * (
-                                    (dx_ik_jl * dy_j_jl) - (dy_ik_jl * dx_j_jl)
+                                    (dx_ikjl * dy_jjl) - (dy_ikjl * dx_jjl)
                                 )
-
-        num_overlaps = int(np.triu(bb_overlap_matrix, k=1).sum())
-        print(
-            f"Total Number of bbox overlaps: {num_overlaps}; "
-            f"number of circle overlaps: {num_circle_overlaps}, "
-            f"number of actual bbox overlaps: {num_bbox_overlaps}"
-            f"Cost: {cost}"
-        )
         grad = -2.0 * np.column_stack([grad_x, grad_y, grad_o])
         return cost, grad
 
@@ -159,17 +151,18 @@ class CellShapes2DOverlap(ShapesOverlap):
         self, x: np.ndarray, x_prev: np.ndarray | None = None
     ) -> tuple[float, np.ndarray]:
         xyo = self._as_matrix(x)
-        uns_trial = self._uns
-        if isinstance(x_prev, np.ndarray):
-            xyo_prev = self._as_matrix(x_prev)
-            for i in range(self.num_inclusions):
-                xi_prev, yi_prev, oi_prev = xyo_prev[i]
-                uns_trial[i] = uns_trial[i].transform(
-                    dx=xyo[i, 0] - xi_prev,
-                    dy=xyo[i, 1] - yi_prev,
-                    rot_angle=Angle.rad(xyo[i, 2] - oi_prev),
-                    pivot=(float(xi_prev), float(yi_prev)),
-                )
+        # uns_trial = self._uns
+        uns_trial = [a_shape.union_of_circles() for a_shape in self.shapes]
+        # if isinstance(x_prev, np.ndarray):
+        #     xyo_prev = self._as_matrix(x_prev)
+        #     for i in range(self.num_inclusions):
+        #         xi_prev, yi_prev, oi_prev = xyo_prev[i]
+        #         uns_trial[i] = uns_trial[i].transform(
+        #             dx=xyo[i, 0] - xi_prev,
+        #             dy=xyo[i, 1] - yi_prev,
+        #             rot_angle=Angle.rad(xyo[i, 2] - oi_prev),
+        #             pivot=(float(xi_prev), float(yi_prev)),
+        #         )
 
         f, g = self._overlap_cost_and_gradient(xyo, uns=uns_trial)
         self._eval_count["f_and_g"] += 1
@@ -184,13 +177,13 @@ class CellShapes2DOverlap(ShapesOverlap):
         olb, oub = 0.0, 2.0 * PI
 
         for i in range(self.num_inclusions):
-            buf_len = 0.2 * (xub - xlb) * np.random.random()
+            buf_len = 0.05 * (xub - xlb) * np.random.random()
             if positions[i, 0] > xub:
                 positions[i, 0] = xub - buf_len
             elif positions[i, 0] < xlb:
                 positions[i, 0] = xlb + buf_len
 
-            buf_len = 0.2 * (yub - ylb) * np.random.random()
+            buf_len = 0.05 * (yub - ylb) * np.random.random()
             if positions[i, 1] > yub:
                 positions[i, 1] = yub - buf_len
             elif positions[i, 1] < ylb:

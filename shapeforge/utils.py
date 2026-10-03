@@ -44,7 +44,7 @@ class DistributionSpec:
     def from_signature(cls, sig: str | Self) -> Self:
         if isinstance(sig, cls):
             return sig
-        
+
         Validator.is_type(sig, str, name="Distribution Signature")
         match = re.match(r"(\w+)\((.*)\)", sig)
         if not match:
@@ -176,3 +176,28 @@ def _load_dict(file_path: str | Path) -> dict:
     )
 
     return config
+
+
+def plot_f_and_g_norms(sol, f_path: Path | None = None):
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(2, 1, figsize=(18, 6))
+    f_hist = getattr(sol, "f_history", None)
+    g_hist = getattr(sol, "g_norm_history", None)
+    if f_hist is not None:
+        n = list(range(len(f_hist)))
+        ax[0].plot(n, f_hist, color='r', label="Function Values")
+        ax[0].legend()
+        ax[0].set_xlabel("Iteration")
+        ax[0].set_ylabel("Function Values")
+    if g_hist is not None:
+        n = list(range(len(g_hist)))
+        ax[1].plot(n, g_hist, color='k', label="Gradient Norms")
+        ax[1].legend()
+        ax[1].set_xlabel("Iteration")
+        ax[1].set_ylabel("Gradient Norms")
+    if f_path is not None:
+        fig.savefig(f_path)
+    else:
+        plt.show()
+    plt.close(fig)

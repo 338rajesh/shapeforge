@@ -9,7 +9,7 @@ from gbox.shapes.shapes_2d import Shape2DPose
 from .cell import Cell, CellDomain2D, initialise_shapes_2d
 from .config import ShapeForgeConfig
 from .overlap_optim import CellShapes2DOverlap
-from .utils import _load_dict, get_logger
+from .utils import _load_dict, get_logger, plot_f_and_g_norms
 
 logger = get_logger(__name__)
 
@@ -30,7 +30,7 @@ def generate_cell_2d(
     ]
     solver_options = {
         "method": "nmspg",
-        "iter_max": 100,
+        "iter_max": 1000,
         "iter_memory": 10,
         "epsilon": 1e-6,
         "spectral_step_min": 1e-30,
@@ -51,7 +51,7 @@ def generate_cell_2d(
         shapes = initialise_shapes_2d(
             cell_domain, cfg.shapes, rng=np.random.default_rng(seed=rng_seed)
         )
-        logger.debug("  Shapes of cell are created & initialised")
+        logger.debug(f"  Cell is initialised with {len(shapes)} shapes.")
 
         cell = Cell(cell_domain, shapes)
         logger.debug("  Cell object containing shapes and domain is created")
@@ -79,7 +79,13 @@ def generate_cell_2d(
             a_shape.position = Shape2DPose(*positions[idx])
 
         cell.plot(f_path=SCRATCH_DIR.joinpath(f"final_{index}.png"))
-
+        cell.save(
+            f_path=SCRATCH_DIR.joinpath(f"final_{index}.json"), overwrite=True
+        )
+        plot_f_and_g_norms(
+            sol=solution,
+            f_path=SCRATCH_DIR.joinpath(f"fg_variation_{index}.png"),
+        )
         cells[index] = (initial_copy, cell)
     return cells
 
