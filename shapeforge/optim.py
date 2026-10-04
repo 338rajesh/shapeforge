@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
+import numpy.typing as npt
 from gbox.core.utils import Validator
 
 
@@ -19,9 +20,17 @@ class OptimisationProblem:
 
     def __init__(self):
         self._x0: np.ndarray = None
-        self._eval_count = {"f_and_g": 0, "proj": 0}
+        self._eval_count = {"func": 0, "grad": 0, "proj": 0}
 
-    def f_and_grad(self, x: np.ndarray, *args, **kwargs) -> float:
+    def func(self, x: np.ndarray, *args, **kwargs) -> float:
+        """
+        Evaluate the objective function and its gradient
+        """
+        raise NotImplementedError(
+            "Objective function and gradient evaluation not implemented. "
+        )
+
+    def grad(self, x: np.ndarray, *args, **kwargs) -> npt.NDArray[np.float32]:
         """
         Evaluate the objective function and its gradient
         """
@@ -56,7 +65,8 @@ class OptimisationResult:
     f_history: list | None = None
     g_norm_history: list | None = None
     iter_count: int = 0
-    f_and_g_eval_count: int = 0
+    f_eval_count: int = 0
+    g_eval_count: int = 0
     proj_eval_count: int = 0
 
     def __post_init__(self):
@@ -70,7 +80,8 @@ class OptimisationResult:
         return {
             "x_optimal": self.x_optimal.tolist(),
             "iter_count": self.iter_count,
-            "f_and_g_eval_count": self.f_and_g_eval_count,
+            "f_eval_count": self.f_eval_count,
+            "g_eval_count": self.g_eval_count,
             "f_history": self.f_history,
             "g_norm_history": self.g_norm_history,
             "proj_eval_count": self.proj_eval_count,
@@ -167,7 +178,8 @@ def nmspg(
             return spectral_step_max
 
     x_k = np.array(x0, dtype=np.float32).copy()
-    f_k, g_k = objective.f_and_grad(x_k)
+    f_k = objective.func(x_k)
+    g_k = objective.grad(x_k)
     f_history = [f_k]
     g_norm_history = [np.linalg.norm(g_k, ord=np.inf)]
 
@@ -178,16 +190,22 @@ def nmspg(
     failure_message = None
     ssl_k = get_init_ssl(x_k, g_k)
     while k < iter_max:
-
         # --------------------------------------------
         #       Check convergence
         # --------------------------------------------
-        if d_inf_norm(x_k, g_k, ssl_=1.0) <= epsilon:
+        d_inf_norm_k = d_inf_norm(x_k, g_k, ssl_=1.0)
+        if d_inf_norm_k <= epsilon:
             status = "success"
             break
 
         if p_bar:
-            print(f"Iteration {k + 1}/{iter_max}, f: {f_k:.6f}", end="\r")
+            print(
+                f"[Iteration {k + 1}/{iter_max}]"
+                f"[d_inf_norm: {d_inf_norm_k:.4g}]"
+                f"[f: {f_k:.4g}]"
+                f"[g_norm: {g_norm_history[-1]:.4g}]",
+                end="\r",
+            )
 
         # --------------------------------------------
         #       Get the search direction, d_k
@@ -204,7 +222,7 @@ def nmspg(
         slope_local = np.dot(g_k, d_k)
         while True:
             x_trial = x_k + alpha * d_k
-            f_trial, _ = objective.f_and_grad(x_trial, x_k)
+            f_trial = objective.func(x_trial, x_k)
 
             # terminate if reached the max number of line search iterations
             if ls_iter >= ls_iter_max:
@@ -232,7 +250,7 @@ def nmspg(
         #       Update the point, x_k
         # --------------------------------------------
         x_kp1 = x_trial
-        _, g_kp1 = objective.f_and_grad(x_kp1)
+        g_kp1 = objective.grad(x_kp1)
 
         # ---------------------------------------------
         #       Compute the spectral step length
@@ -267,6 +285,7 @@ def nmspg(
         f_history=[float(i) for i in f_history],
         g_norm_history=g_norm_history,
         iter_count=k,
-        f_and_g_eval_count=objective._eval_count["f_and_g"],
+        f_eval_count=objective._eval_count["func"],
+        g_eval_count=objective._eval_count["grad"],
         proj_eval_count=objective._eval_count["proj"],
     )

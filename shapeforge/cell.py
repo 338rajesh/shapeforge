@@ -215,7 +215,7 @@ class Inclusions2D(Inclusions):
         """
         positions = np.array(
             [
-                inclusion.position.point.tolist()
+                inclusion.position.to_tuple()
                 for inclusion in self._inclusions
             ]
         )
@@ -227,9 +227,9 @@ class Inclusions2D(Inclusions):
         contains x, y and orientation (in radians)
         """
         num_inclusions = len(self)
-        if xyo.shape != (num_inclusions, 2):
+        if xyo.shape != (num_inclusions, 3):
             raise ValueError(
-                f"Expected an array of shape ({num_inclusions, 2}), "
+                f"Expected an array of shape ({num_inclusions, 3}), "
                 f"Got {xyo.shape}"
             )
         for i in range(num_inclusions):

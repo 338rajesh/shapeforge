@@ -1,8 +1,10 @@
 import argparse
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import gbox as gb
 import numpy as np
 from gbox.shapes.shapes_2d import Shape2DPose
 
@@ -42,6 +44,7 @@ def generate_cell_2d(
         "p_bar": True,
     }
     for index in range(cfg.num_cells):
+        t0 = time.perf_counter()
         rng_seed = cfg.metadata.rng_seed + index
         logger.info(f"Generating cell {index} with seed {rng_seed}")
 
@@ -62,8 +65,24 @@ def generate_cell_2d(
 
         # Solving the overlap
         overlap_problem = CellShapes2DOverlap(
-            cell.domain, cell.shapes.clone(), buffer_thickness_ratio=0.05
+            cell.domain, cell.shapes, buffer_thickness_ratio=0.05
         )
+
+        a_ca = [a_shape.union_of_circles() for a_shape in cell.shapes]
+
+        b_ca: list[gb.CirclesArray] = []
+        xyo_matrix = overlap_problem._as_matrix(overlap_problem.x0)
+        _radii = [s.equivalent_circle_radius for s in cell.shapes]
+        for i in range(overlap_problem.num_inclusions):
+            xs, ys, _ = xyo_matrix.T
+            b_ca.append(
+                gb.CirclesArray.from_circles(
+                    [gb.Circle(float(_radii[i]), (float(xs[i]), float(ys[i])))]
+                )
+            )
+        print(f"a_ca:\n{[j.to_dict() for j in a_ca]}")
+        print()
+        print(f"b_ca:\n{[j.to_dict() for j in b_ca]}")
 
         _x0 = overlap_problem.x0
         import json
@@ -81,13 +100,15 @@ def generate_cell_2d(
         solution = overlap_problem.solve(**solver_options)
 
         print(
-            f"status: {solution.status}, \t iter count: {solution.iter_count}"
+            f"\n\n[status: {solution.status}]"
+            f"[iter count: {solution.iter_count}]"
+            f"[Time: {(time.perf_counter() - t0):4.3f}sec]"
         )
 
         # Updating the shapes with the optimal positions
         positions = overlap_problem._as_matrix(solution.x_optimal)
         for idx, a_shape in enumerate(shapes):
-            a_shape.position = Shape2DPose(*positions[idx], 0.0)
+            a_shape.position = Shape2DPose(*positions[idx])
 
         cell.plot(f_path=SCRATCH_DIR.joinpath(f"final_{index}.png"))
         # cell.save(
