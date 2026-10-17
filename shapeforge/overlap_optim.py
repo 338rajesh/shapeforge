@@ -157,9 +157,6 @@ class CellShapes2DOverlap(ShapesOverlap):
         self._eval_count["grad"] += 1
         return self._evaluate(x)[1]
 
-    def update_x(self, x_new: np.ndarray):
-        pass
-
     def projection(self, x: np.ndarray) -> np.ndarray:
         positions = self._as_matrix(x)  # -> (N, 3) shaped matrix
         bounds = self.domain.bounds.to_dict()

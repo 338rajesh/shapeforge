@@ -38,15 +38,7 @@ class OptimisationProblem:
         """
         if hasattr(self, "grad_f") and callable(self.grad_f):
             return self.grad_f(x, *args, **kwargs)
-        raise NotImplementedError(
-            "Gradient evaluation not implemented. "
-        )
-
-    def update_x(self, x_new: np.ndarray) -> None:
-        """
-        Optional hook for sub-classes to update internal state when position changes.
-        """
-        pass
+        raise NotImplementedError("Gradient evaluation not implemented. ")
 
     def projection(self, x: np.ndarray) -> np.ndarray:
         """
@@ -265,7 +257,6 @@ def nmspg(
         # ---------------------------------------------
         #       Update variables for the next iteration
         # ---------------------------------------------
-        objective.update_x(x_kp1)
         x_k = x_kp1
         f_k = f_trial
         g_k = g_kp1
