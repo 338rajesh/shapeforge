@@ -222,7 +222,7 @@ def nmspg(
         slope_local = np.dot(g_k, d_k)
         while True:
             x_trial = x_k + alpha * d_k
-            f_trial = objective.func(x_trial, x_k)
+            f_trial = objective.func(x_trial)
 
             # terminate if reached the max number of line search iterations
             if ls_iter >= ls_iter_max:

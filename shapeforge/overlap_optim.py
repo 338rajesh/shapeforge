@@ -1,5 +1,7 @@
 import numpy as np
-from gbox import Circle, CirclesArray
+
+# from gbox import Circle, CirclesArray
+from gbox.shapes.shapes_2d import Shape2DPose
 
 from .cell import CellDomain, CellDomain2D, Inclusions, Inclusions2D
 from .optim import OptimisationProblem
@@ -58,194 +60,105 @@ class CellShapes2DOverlap(ShapesOverlap):
         equivalent_circle_radii = shapes.get_equivalent_circle_radii()
         self._ssd = equivalent_circle_radii * buffer_thickness_ratio
         self._radii = equivalent_circle_radii
-        self._x_prev = None
 
-    def update_x(self, x_new: np.ndarray):
-        x_new = self._as_matrix(x_new)
-        self.shapes.set_positions(x_new)
+        self._templates = self._build_templates()  # body-frame circles
+        self._cache_x = None
+        self._cache = None
 
-    def _get_bbox_overlap_matrix(self, uns: list[CirclesArray]) -> np.ndarray:
-        bbox_overla_matrix = np.zeros(
-            (self.num_inclusions, self.num_inclusions), dtype=np.bool_
-        )
-        for i in range(self.num_inclusions):
-            for j in range(1 + i, self.num_inclusions):
-                bbox_overla_matrix[i, j] = uns[i].bounding_box.overlaps(
-                    uns[j].bounding_box
-                )
-        return bbox_overla_matrix
+    # ------------------------------------------------------------------
+    # Geometry: a pure function of x, never reads self.shapes
+    # ------------------------------------------------------------------
+    def _build_templates(self) -> list[np.ndarray]:
+        """Body-frame circles (cx, cy, r) for each shape, at pose (0, 0, 0)."""
+        templates = []
+        for shape in self.shapes:
+            original_pose = shape.position
+            shape.position = Shape2DPose(0.0, 0.0, 0.0)
+            circles = [
+                (c.centre[0], c.centre[1], c.radius)
+                for c in shape.union_of_circles()
+            ]
+            shape.position = original_pose
+            templates.append(np.asarray(circles, dtype=float))
+        return templates
 
-    # def _overlap_cost_and_gradient(
-    #     self,
-    #     positions: np.ndarray,
-    #     # uns: list[CirclesArray],
-    # ):
-    #     # xs, ys = positions.T
+    def _circles_at(self, positions: np.ndarray):
+        """World-frame circle centres and radii for every shape at (N, 3) poses."""
+        out = []
+        for (x, y, th), tpl in zip(positions, self._templates):
+            c, s = np.cos(th), np.sin(th)
+            px, py, r = tpl[:, 0], tpl[:, 1], tpl[:, 2]
+            out.append((x + c * px - s * py, y + s * px + c * py, r))
+        return out
 
-    #     cost = 0.0
-    #     grad_x = np.zeros(self.num_inclusions)
-    #     grad_y = np.zeros(self.num_inclusions)
+    # ------------------------------------------------------------------
+    # Cost and gradient, evaluated together and cached on x
+    # ------------------------------------------------------------------
+    def _evaluate(self, x: np.ndarray):
+        x = np.asarray(x, dtype=float)
+        if self._cache_x is not None and np.array_equal(x, self._cache_x):
+            return self._cache
 
-    #     for i in range(self.num_inclusions):
-    #         for j in range(1 + i, self.num_inclusions):
-    #             dx = positions[i, 0] - positions[j, 0]
-    #             dy = positions[i, 1] - positions[j, 1]
-    #             dist = float(np.hypot(dx, dy))
-
-    #             dca = self._radii[i] + self._radii[j] + self._ssd[i]
-    #             c = dca - dist
-
-    #             if c > 0.0:
-    #                 dol = c / (dist + 1e-6)  # degree of overlap
-
-    #                 cost += c * c  # making convex
-
-    #                 tmp_gx = dol * dx
-    #                 tmp_gy = dol * dy
-    #                 grad_x[i] += tmp_gx
-    #                 grad_x[j] -= tmp_gx
-    #                 grad_y[i] += tmp_gy
-    #                 grad_y[j] -= tmp_gy
-
-    #     grad = -2.0 * np.column_stack([grad_x, grad_y])
-    #     return cost, grad
-
-    def _overlap_cost_gradient(
-        self,
-        positions: np.ndarray,
-        uns: list[CirclesArray],
-    ):
-        xs, ys, _ = positions.T
+        pos = self._as_matrix(x)  # (N, 3): x, y, theta
+        circles = self._circles_at(pos)
+        N = self.num_inclusions
 
         cost = 0.0
-        grad_x = np.zeros(self.num_inclusions)
-        grad_y = np.zeros(self.num_inclusions)
-        grad_o = np.zeros(self.num_inclusions)
+        gcx = [np.zeros_like(c[0]) for c in circles]  # dCost/d(circle centre)
+        gcy = [np.zeros_like(c[0]) for c in circles]
 
-        uns_1 = [
-            CirclesArray.from_circles(
-                [Circle(float(self._radii[i]), (float(xs[i]), float(ys[i])))]
+        for i in range(N):
+            cxi, cyi, ri = circles[i]
+            for j in range(i + 1, N):
+                cxj, cyj, rj = circles[j]
+
+                dx = cxi[:, None] - cxj[None, :]
+                dy = cyi[:, None] - cyj[None, :]
+                d = np.hypot(dx, dy)
+                c = (
+                    ri[:, None] + rj[None, :] + self._ssd[i] + self._ssd[j]
+                ) - d  # penetration depth
+
+                mask = c > 0.0
+                if not mask.any():
+                    continue
+
+                cost += float(np.sum(c[mask] ** 2))
+                # d(c^2)/d(centre_k) = -2c * (ck - cl) / d
+                w = np.where(mask, -2.0 * c / np.maximum(d, 1e-12), 0.0)
+                gcx[i] += (w * dx).sum(axis=1)
+                gcx[j] -= (w * dx).sum(axis=0)
+                gcy[i] += (w * dy).sum(axis=1)
+                gcy[j] -= (w * dy).sum(axis=0)
+
+        # Chain rule: centre = (x, y) + R(theta) p_k
+        gx, gy, gth = np.zeros(N), np.zeros(N), np.zeros(N)
+        for i in range(N):
+            tpl = self._templates[i]
+            th = pos[i, 2]
+            c, s = np.cos(th), np.sin(th)
+            px, py = tpl[:, 0], tpl[:, 1]
+            gx[i] = gcx[i].sum()
+            gy[i] = gcy[i].sum()
+            gth[i] = np.sum(
+                gcx[i] * (-s * px - c * py) + gcy[i] * (c * px - s * py)
             )
-            for i in range(self.num_inclusions)
-        ]
-        # print(
-        #     f"[[DEBUG-2]] From explcit eval\n{[a.to_dict() for a in uns_1]}\n"
-        # )
-        print("\n[[DEBUG]]")
-        for a, b in zip(uns, uns_1):
-            ad, bd = a.to_dict(), b.to_dict()
-            diffs = {k: tuple(p - q for p, q in zip(ad[k], bd[k])) for k in ad}
-            print(diffs)
-        print()
 
-        bb_overlap_matrix = self._get_bbox_overlap_matrix(uns_1)
+        grad = np.concatenate([gx, gy, gth])  # matches _as_flat order
+        self._cache_x = x.copy()
+        self._cache = (cost, grad)
+        return self._cache
 
-        for i in range(self.num_inclusions):
-            ixc, iyc = xs[i], ys[i]
-            for j in range(1 + i, self.num_inclusions):
-                jxc, jyc = xs[j], ys[j]
-                if bb_overlap_matrix[i, j]:  # Proceed only if bbox overlaps
-                    for circle_k in uns_1[i]:
-                        kxc, kyc = circle_k.centre
-                        kr = circle_k.radius
-                        k_buff_t = self._ssd[i]
-                        for circle_l in uns_1[j]:
-                            lxc, lyc = circle_l.centre
-                            lr = circle_l.radius
-                            l_buff_t = self._ssd[j]
-
-                            dx_ikjl = kxc - lxc
-                            dy_ikjl = kyc - lyc
-
-                            distance_ikjl = float(np.hypot(dx_ikjl, dy_ikjl))
-                            min_distance_ik_jl = kr + lr + k_buff_t + l_buff_t
-
-                            c_ikjl = min_distance_ik_jl - distance_ikjl
-
-                            if c_ikjl > 0.0:  # actual_distance < min_distance
-                                cost += c_ikjl * c_ikjl
-
-                                eps = 1e-06 if distance_ikjl < 1e-06 else 0.0
-                                overlap_degree = c_ikjl / (distance_ikjl + eps)
-
-                                temp_grad_x = overlap_degree * dx_ikjl
-                                temp_grad_y = overlap_degree * dy_ikjl
-                                grad_x[i] += temp_grad_x
-                                grad_x[j] -= temp_grad_x
-                                grad_y[i] += temp_grad_y
-                                grad_y[j] -= temp_grad_y
-
-                                dx_iik = ixc - kxc
-                                dy_iik = iyc - kyc
-                                dx_jjl = jxc - lxc
-                                dy_jjl = jyc - lyc
-                                grad_o[i] += overlap_degree * (
-                                    (dx_ikjl * dy_iik) - (dy_ikjl * dx_iik)
-                                )
-                                grad_o[j] -= overlap_degree * (
-                                    (dx_ikjl * dy_jjl) - (dy_ikjl * dx_jjl)
-                                )
-        grad = -2.0 * np.concatenate([grad_x, grad_y, grad_o])
-        return grad
-
-    def _overlap_cost(
-        self,
-        positions: np.ndarray,
-        uns: list[CirclesArray],
-    ) -> float:
-        xs, ys, _ = positions.T
-
-        cost = 0.0
-        uns_1 = [
-            CirclesArray.from_circles(
-                [Circle(float(self._radii[i]), (float(xs[i]), float(ys[i])))]
-            )
-            for i in range(self.num_inclusions)
-        ]
-        print("\n[[DEBUG]]")
-        for a, b in zip(uns, uns_1):
-            ad, bd = a.to_dict(), b.to_dict()
-            diffs = {k: tuple(p - q for p, q in zip(ad[k], bd[k])) for k in ad}
-            print(diffs)
-        print()
-
-        bb_overlap_matrix = self._get_bbox_overlap_matrix(uns_1)
-
-        for i in range(self.num_inclusions):
-            for j in range(1 + i, self.num_inclusions):
-                if bb_overlap_matrix[i, j]:  # Proceed only if bbox overlaps
-                    for circle_k in uns_1[i]:
-                        for circle_l in uns_1[j]:
-                            distance_ikjl = circle_k.distance_to(circle_l)
-                            min_distance_ik_jl = (
-                                circle_k.radius
-                                + circle_l.radius
-                                + self._ssd[i]
-                                + self._ssd[j]
-                            )
-
-                            c_ikjl = min_distance_ik_jl - distance_ikjl
-
-                            if c_ikjl > 0.0:  # actual_distance < min_distance
-                                cost += c_ikjl * c_ikjl
-
-        return cost
-
-    def func(self, x: np.ndarray, x_prev: np.ndarray | None = None) -> float:
-        xy = self._as_matrix(x)
-        uns = [a_shape.union_of_circles() for a_shape in self.shapes]
-
-        f = self._overlap_cost(xy, uns)
+    def func(self, x: np.ndarray) -> float:
         self._eval_count["func"] += 1
-        return f
+        return self._evaluate(x)[0]
 
     def grad(self, x: np.ndarray) -> None:
-        xy = self._as_matrix(x)
-        uns = [a_shape.union_of_circles() for a_shape in self.shapes]
-
-        g = self._overlap_cost_gradient(xy, uns)
         self._eval_count["grad"] += 1
-        return g
+        return self._evaluate(x)[1]
+
+    def update_x(self, x_new: np.ndarray):
+        pass
 
     def projection(self, x: np.ndarray) -> np.ndarray:
         positions = self._as_matrix(x)  # -> (N, 3) shaped matrix

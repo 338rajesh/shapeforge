@@ -80,9 +80,6 @@ def generate_cell_2d(
                     [gb.Circle(float(_radii[i]), (float(xs[i]), float(ys[i])))]
                 )
             )
-        print(f"a_ca:\n{[j.to_dict() for j in a_ca]}")
-        print()
-        print(f"b_ca:\n{[j.to_dict() for j in b_ca]}")
 
         _x0 = overlap_problem.x0
         import json
