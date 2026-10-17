@@ -1,9 +1,5 @@
 # Order of modules: main << cell << utils
 
-from .utils import load_yaml
-from .main import generate_cell
+from .profiler import Profiler, profile_function
 
-__all__ = [
-    "load_yaml",
-    "generate_cell",
-]
+__all__ = ["Profiler", "profile_function"]

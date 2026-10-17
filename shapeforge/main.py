@@ -1,125 +1,294 @@
 import argparse
-import json
-import shutil
+import logging
+import time
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
+import gbox as gb
 import numpy as np
 
-from .cell import CellDomain, initialise_shapes
-from .cell import Cell
-from .utils import load_yaml
+from .cell import Cell, CellDomain2D, initialise_shapes_2d
+from .config import ShapeForgeConfig
+from .overlap_optim import CellShapes2DOverlap
+from .utils import _load_dict, get_logger, plot_f_and_g_norms
+
+logger = get_logger(__name__)
 
 
-def _generate_cell(
-    cfg: dict, get_init_cell: bool = False
-) -> Cell | tuple[Cell, Cell]:
-    # --------------------------------------------------------- #
-    #               Cell Initialization                         #
-    # --------------------------------------------------------- #
-    cell_domain = CellDomain.from_dict(cfg["domain"])
-    print("> Initialized the domain")
-    shapes = cfg.get("shapes", [])
-    if len(shapes) == 0:
-        print(
-            "WARNING: no shapes are found in the config, so returning "
-            "empty cell domain."
+def _generate_cell_2d_core(
+    cfg: ShapeForgeConfig,
+) -> Sequence[tuple[Cell, Cell]]:
+    if cfg.packing.periodicity:
+        raise NotImplementedError(
+            "Periodic packing is not yet supported in 2D cell generation."
         )
-        return Cell(cell_domain)  # just return the empty cell domain
 
-    shapes = initialise_shapes(
-        shapes,
-        cell_domain,
-        rng=np.random.default_rng(seed=cfg.get("rng_seed")),
-        init_method=cfg.get("engine", {}).get("init_method", "uniform"),
-    )
-    print("> Shapes are initialised in the domain.")
-    cell = Cell(cell_domain, shapes)
-    init_cell_copy = cell.clone()
+    out_dir = Path(cfg.export.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    # --------------------------------------------------------- #
-    #               Cell Optimisation                           #
-    # --------------------------------------------------------- #
-    cell.remove_inclusion_overlaps(
-        ssd_ratio=cfg.get("min_gap", 0.05),
-        proj_buffer_ratio=cfg.get("proj_buffer_ratio", 0.5),
-    )
-    print("> Cell generation completed!")
+    cells: list[tuple[Cell, Cell]] = [
+        (None, None) for _ in range(cfg.num_cells)
+    ]
 
-    if get_init_cell:
-        return cell, init_cell_copy
-    return cell
+    solver_options = {
+        "method": "nmspg",
+        "iter_max": 1000,
+        "iter_memory": 10,
+        "epsilon": 1e-6,
+        "spectral_step_min": 1e-30,
+        "spectral_step_max": 1e30,
+        "gamma": 0.0001,
+        "sigma1": 0.1,
+        "sigma2": 0.9,
+        "ls_iter_max": 20,
+        "p_bar": True,
+    }
+    opt_user_cfg = dict(cfg.solver.optimiser)
+    if "name" in opt_user_cfg:
+        solver_options["method"] = opt_user_cfg.pop("name")
+    if "max_iter" in opt_user_cfg:
+        solver_options["iter_max"] = opt_user_cfg.pop("max_iter")
+    solver_options.update(opt_user_cfg)
+
+    plot_kwargs = {
+        "size": cfg.export.image_dimensions,
+        "background": cfg.export.background,
+        "foreground": cfg.export.facecolor,
+        "dpi": cfg.export.dpi,
+    }
+
+    img_formats = [
+        fmt
+        for fmt in cfg.export.formats
+        if fmt.lower() in ("png", "jpg", "jpeg", "pdf")
+    ]
+    data_formats = [
+        fmt
+        for fmt in cfg.export.formats
+        if fmt.lower() in ("json", "yaml", "yml", "pkl", "pickle", "npz")
+    ]
+
+    logger.info(f"Running ShapeForge task: {cfg.metadata.title}")
+
+    for index in range(cfg.num_cells):
+        t0 = time.perf_counter()
+        rng_seed = cfg.metadata.rng_seed + index
+        rng = np.random.default_rng(seed=rng_seed)
+        logger.info(f"Generating cell {index} with seed {rng_seed}")
+
+        cell_domain = CellDomain2D(bounds=cfg.domain.bounds)
+        logger.debug("  Domain of cell is created")
+
+        shapes = initialise_shapes_2d(
+            cell_domain,
+            cfg.shapes,
+            rng=rng,
+            init_method=cfg.solver.init_method,
+        )
+        logger.debug(f"  Cell is initialised with {len(shapes)} shapes.")
+
+        if cfg.packing.adjust_bounds_to_exact_vf:
+            target_vf = sum(s.volume_fraction for s in cfg.shapes)
+            if target_vf > 0.0:
+                actual_area = shapes.area
+                required_domain_area = actual_area / target_vf
+                scale = np.sqrt(required_domain_area / cell_domain.area)
+                x_min, x_max = cell_domain.x_bounds
+                y_min, y_max = cell_domain.y_bounds
+                new_x_max = x_min + (x_max - x_min) * scale
+                new_y_max = y_min + (y_max - y_min) * scale
+                cell_domain = CellDomain2D(
+                    gb.Bounds2DRectangular(x_min, y_min, new_x_max, new_y_max)
+                )
+                logger.debug(
+                    f"  Adjusted domain bounds to {cell_domain.domain} "
+                    f"for exact volume fraction {target_vf:.4f}"
+                )
+
+        cell = Cell(cell_domain, shapes)
+        logger.debug("  Cell object containing shapes and domain is created")
+
+        initial_copy = cell.clone()
+
+        # Render/export initial cell
+        initial_arr = None
+        for fmt in img_formats:
+            initial_arr = initial_copy.plot(
+                f_path=out_dir / f"initial_{index}.{fmt}", **plot_kwargs
+            )
+        if initial_arr is None and cfg.export.as_array:
+            initial_arr = initial_copy.plot(f_path=None, **plot_kwargs)
+
+        for fmt in data_formats:
+            initial_copy.save(
+                f_path=out_dir / f"initial_{index}.{fmt}", overwrite=True
+            )
+
+        logger.debug("  A copy of the cell is created for comparison")
+
+        # Solving the overlap
+        overlap_problem = CellShapes2DOverlap(
+            cell.domain,
+            cell.shapes,
+            buffer_thickness_ratio=cfg.packing.min_gap_ratio,
+            proj_buffer_ratio=(
+                cfg.packing.proj_buffer_ratio
+                if cfg.packing.proj_buffer_ratio is not None
+                else 2.0
+            ),
+            rng=rng,
+        )
+
+        solution = overlap_problem.solve(**solver_options)
+
+        print()
+        logger.info(
+            f"[status: {solution.status}]"
+            f"[iter count: {solution.iter_count}]"
+            f"[Time: {(time.perf_counter() - t0):4.3f}sec]"
+        )
+
+        # Updating the shapes with the optimal positions
+        positions = overlap_problem._as_matrix(solution.x_optimal)
+        cell.shapes.set_positions(positions)
+
+        final_arr = None
+        for fmt in img_formats:
+            final_arr = cell.plot(
+                f_path=out_dir / f"final_{index}.{fmt}", **plot_kwargs
+            )
+        if final_arr is None and cfg.export.as_array:
+            final_arr = cell.plot(f_path=None, **plot_kwargs)
+
+        for fmt in data_formats:
+            cell.save(f_path=out_dir / f"final_{index}.{fmt}", overwrite=True)
+
+        if cfg.export.as_array:
+            if initial_arr is not None:
+                np.save(out_dir / f"initial_{index}.npy", initial_arr)
+            if final_arr is not None:
+                np.save(out_dir / f"final_{index}.npy", final_arr)
+
+        plot_f_and_g_norms(
+            sol=solution,
+            f_path=out_dir / f"fg_variation_{index}.png",
+        )
+        cells[index] = (initial_copy, cell)
+    return cells
 
 
-def generate_cell(config: dict | str | Path) -> Cell:
+def generate_cell_2d(
+    config: dict[str, Any] | str | Path,
+    *,
+    log_level: str | None = None,
+    profile: bool = False,
+    profile_output: str | Path | None = None,
+    profile_lines: int = 25,
+    profile_sort: str = "cumulative",
+) -> Sequence[tuple[Cell, Cell]]:
     """
     Generate a unit cell with the specified configuration.
+
+    Parameters
+    ----------
+    config : dict | str | Path
+        Configuration mapping or path to YAML/JSON configuration file.
+    log_level : str | None, optional
+        Logging level override (e.g. 'DEBUG', 'INFO'). If None, uses metadata.log_level from config.
+    profile : bool, optional
+        Whether to profile the cell generation run (default: False).
+    profile_output : str | Path | None, optional
+        Destination file path for the .prof binary profile data. If None,
+        defaults to '<export.output_dir>/shapeforge.prof'.
+    profile_lines : int, optional
+        Number of hotspot entries to display in the terminal summary (default: 25).
+    profile_sort : str, optional
+        Sort criterion for profiling stats: 'cumulative', 'time', or 'calls'
+        (default: 'cumulative').
     """
-    print("Starting the cell genration...")
-    if isinstance(config, (str, Path)):
-        config = load_yaml(config)
-    if not isinstance(config, dict):
-        raise ValueError("Expecting config to be a dictionary.")
-    print("> Loaded the configuration")
+    config_dict = _load_dict(config)
+    cfg = ShapeForgeConfig.from_dict(config_dict)
 
-    verbose = int(config.get("verbose", 1))
-    export_options = config.get("export", {})
-    if not export_options:
-        raise ValueError("export options are required in the config.")
-    output_dir = export_options.get("output_dir")
-    if not output_dir:
-        raise ValueError(
-            "output_dir is required in export options for exporting."
-        )
-    output_dir = Path(output_dir).resolve()
-    if output_dir.exists():
-        rm_output_dir = input(
-            "Output directory already exists. Remove it? (y/n): "
-        )
-        if rm_output_dir.lower() == "y":
-            shutil.rmtree(output_dir)
-    output_dir.mkdir(exist_ok=True, parents=True)
-    export_fmt = export_options.get("format", "png")
+    effective_log_level = (log_level or cfg.metadata.log_level).upper()
+    logging.getLogger("shapeforge").setLevel(effective_log_level)
+    logger.setLevel(effective_log_level)
 
-    
-    if verbose > 10:
-        print("Generating the Cell with configuration:")
-        print(json.dumps(config, indent=4))
+    logger.info("Starting the cell 2D generation...")
 
-    num_cells = config.get("num_cells", 1)
-    if not isinstance(num_cells, int) or num_cells < 1:
-        raise ValueError(
-            "num_cells should be an integer greater than or equal to 1."
-        )
+    if profile:
+        from .profiler import Profiler
 
-    for i in range(num_cells):
-        config["rng_seed"] = config["rng_seed"] + i
-        if 0 < verbose < 10:
-            print(f"Generating cell {i} with seed {config['rng_seed']}")
-        cell = _generate_cell(config)
+        if profile_output is None:
+            profile_output = Path(cfg.export.output_dir) / "shapeforge.prof"
 
-        cell.save(
-            f_path=output_dir.joinpath(f"cell_{i}.{export_fmt}"),
-            plot_options=export_options.get("plot_with"),
-        )
-        # image_options = config.get("image", {})
-        # if image_options:
-        #     cell.plot(
-        #         f_path=output_dir.joinpath("final.png"),
-        #         shape_vis_options=image_options.get("shapes", {}),
-        #         domain_vis_options=image_options.get("domain", {}),
-        #         image_size=image_options.get("size", (256, 256)),
-        #     )
+        with Profiler(
+            output_path=profile_output,
+            top_n=profile_lines,
+            sort_by=profile_sort,
+            print_summary=True,
+        ):
+            return _generate_cell_2d_core(cfg)
+    else:
+        return _generate_cell_2d_core(cfg)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=("ShapeForge CLI"))
+def build_parser() -> argparse.ArgumentParser:
+    _log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+    parser = argparse.ArgumentParser(
+        prog="shapeforge",
+        description="ShapeForge: RVE and Unit Cell Generation Engine",
+    )
     parser.add_argument(
         "config_file",
         type=str,
-        help="Path to the YAML configuration file for the shape forge.",
+        help="Path to the YAML configuration file for ShapeForge.",
     )
+    parser.add_argument(
+        "--log",
+        default=None,
+        choices=_log_levels + list(map(str.lower, _log_levels)),
+        help="Set the logging level (default: from config metadata.log_level, or WARNING)",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Profile execution with cProfile to identify performance bottlenecks.",
+    )
+    parser.add_argument(
+        "--profile-output",
+        type=str,
+        default=None,
+        help="Destination path for .prof profiling output file (default: <output_dir>/shapeforge.prof).",
+    )
+    parser.add_argument(
+        "--profile-lines",
+        type=int,
+        default=25,
+        help="Number of hotspot lines to show in the console summary (default: 25).",
+    )
+    parser.add_argument(
+        "--profile-sort",
+        type=str,
+        choices=["cumulative", "time", "calls"],
+        default="cumulative",
+        help="Sort metric for the profiling summary (default: cumulative).",
+    )
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
-    generate_cell(args.config_file)
+    generate_cell_2d(
+        args.config_file,
+        log_level=args.log,
+        profile=args.profile,
+        profile_output=args.profile_output,
+        profile_lines=args.profile_lines,
+        profile_sort=args.profile_sort,
+    )
 
 
 if __name__ == "__main__":

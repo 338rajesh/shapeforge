@@ -1,15 +1,60 @@
 import json
 import re
-from pathlib import Path
-
-import yaml
-
+from collections.abc import Callable
+from dataclasses import dataclass
 from functools import partial
-from typing import Optional
+from pathlib import Path
+from typing import Self
 
 import numpy as np
 import numpy.typing as npt
+import yaml
+from gbox.core.utils import Validator, get_logger
 from scipy import stats
+
+logger = get_logger(__name__)
+PI = float(np.pi)
+
+
+@dataclass(frozen=True, slots=True)
+class DistributionSpec:
+    """
+    A dataclass to specify the distribution of a quantity.
+    """
+
+    distribution: str
+    loc: float
+    scale: float
+
+    def __post_init__(self):
+        Validator.as_float(self.scale, low=0.0, closed_bounds=False)
+
+        rv: stats.rv_continuous = getattr(stats, self.distribution, None)
+        if rv is None or not hasattr(rv, "rvs"):
+            raise ValueError(
+                f"Unsupported distribution: {self.distribution}. "
+                "Ensure it is a valid scipy.stats distribution."
+            )
+
+    def rvs_partial(self) -> Callable[[], float]:
+        rv: stats.rv_continuous = getattr(stats, self.distribution, None)
+        return partial(rv.rvs, loc=self.loc, scale=self.scale)
+
+    @classmethod
+    def from_signature(cls, sig: str | Self) -> Self:
+        if isinstance(sig, cls):
+            return sig
+
+        Validator.is_type(sig, str, name="Distribution Signature")
+        match = re.match(r"(\w+)\((.*)\)", sig)
+        if not match:
+            raise ValueError(
+                "Invalid signature: it must be in the form of"
+                "<method_name>(<loc>, <scale>). Example: uniform(2.0, 0.1)"
+            )
+        method = match.group(1)
+        loc, scale = [float(a.strip()) for a in match.group(2).split(",")]
+        return cls(method, loc, scale)
 
 
 class DistributionSampler:
@@ -17,12 +62,12 @@ class DistributionSampler:
     A class to create a sampler for various distributions.
     """
 
+    __slots__ = ("_sampler",)
+
     def __init__(
         self,
-        method: str,
-        loc: float,
-        scale: float,
-        rng: Optional[np.random.Generator] = None,
+        distribution_spec: DistributionSpec,
+        rng: np.random.Generator | None = None,
         rvs_kwargs=None,
     ):
         """
@@ -64,37 +109,16 @@ class DistributionSampler:
         ```
         """
 
-        rv: stats.rv_continuous = getattr(stats, method, None)
-        if rv is None or not hasattr(rv, "rvs"):
-            raise ValueError(
-                f"Unsupported distribution: {method}. "
-                "Ensure it is a valid scipy.stats distribution."
-            )
-
-        self.sampler = partial(
-            rv.rvs,
-            random_state=rng or np.random.default_rng(),
-            loc=loc,
-            scale=scale,
-            **(rvs_kwargs or {}),
+        rng = rng or np.random.default_rng()
+        rvs_kwargs = rvs_kwargs or {}
+        self._sampler = partial(
+            distribution_spec.rvs_partial(), random_state=rng, **rvs_kwargs
         )
 
     @classmethod
-    def from_signature(
-        cls, sig: str, rng=None, rvs_kwargs=None
-    ) -> "DistributionSampler":
-        if not isinstance(sig, str):
-            raise ValueError("Signature must be a string.")
-        match = re.match(r"(\w+)\((.*)\)", sig)
-        if not match:
-            raise ValueError(
-                "Invalid signature: it must be in the form of"
-                "<method_name>(<loc>, <scale>). Example: uniform(2.0, 0.1)"
-            )
-        method = match.group(1)
-        loc, scale = [float(a.strip()) for a in match.group(2).split(",")]
-
-        return cls(method, loc, scale, rng, rvs_kwargs)
+    def from_signature(cls, sig: str, rng=None, rvs_kwargs=None) -> Self:
+        distr_spec = DistributionSpec.from_signature(sig)
+        return cls(distr_spec, rng, rvs_kwargs)
 
     def sample(self, size: int = 1) -> npt.NDArray | float:
         """
@@ -112,115 +136,59 @@ class DistributionSampler:
             A list of samples from each distribution. If only one distribution
             is specified, returns a single array of samples.
         """
-        if not isinstance(size, int) or size < 1:
-            raise ValueError("Size must be a positive integer > 0.")
-        a = np.asarray(self.sampler(size=size))
+        size = Validator.as_int(size, low=1, name="Sample Size")
+        a = np.asarray(self._sampler(size=size))
         if size == 1:
             return a[0].item()
         return a
 
 
-def load_yaml(file_path: str, show: bool = False) -> dict:
-    """
-    Load a YAML configuration file and optionally print its contents.
+def _load_dict(file_path: str | Path | dict) -> dict:
+    if isinstance(file_path, dict):
+        return file_path
+    fp = Validator.file_path(
+        file_path, must_exist=True, extensions=[".json", ".yml", ".yaml"]
+    )
+    with open(fp, "r") as file:
+        if fp.suffix in (".yaml", "yml"):
+            config = yaml.safe_load(file)
+        else:  # ".json"
+            config = json.load(file)
 
-    Parameters
-    ----------
-    file_path : str
-        The path to the YAML configuration file.
-    show : bool, optional
-        If True, print the loaded configuration. Default is False.
+    Validator.is_type(config, dict, name="loaded values")
 
-    Returns
-    -------
-    dict
-        The loaded configuration as a dictionary.
-    """
-    fp = Path(file_path).resolve()
-    if not fp.exists():
-        raise FileNotFoundError(
-            f"Configuration file '{file_path}' does not exist."
-        )
-    if not fp.suffix == ".yaml":
-        raise ValueError(
-            f"Configuration file '{file_path}' must have a .yaml extension."
-        )
-
-    with open(file_path, "r") as file:
-        config = yaml.safe_load(file)
-
-    if show:
-        json_str = json.dumps(config, indent=4)
-        print(f"Loaded configuration from {file_path}:\n{json_str}")
+    logger.debug(
+        f"Loaded configuration from {file_path}:\n"
+        f"{json.dumps(config, indent=4)}"
+    )
 
     return config
 
 
-def _validate_dict(
-    d: dict,
-    keys: list,
-    val_types: list = None,
-    val_ranges: list[tuple | None] = None,
-    ret_val: bool = False,
-) -> None | tuple:
-    """
-    Validate that a dictionary contains specific keys.
+def plot_f_and_g_norms(sol, f_path: Path | None = None):
+    import matplotlib.pyplot as plt
 
-    Parameters
-    ----------
-    d : dict
-        The dictionary to validate.
-    keys : list
-        The list of keys that must be present in the dictionary.
-    val_types : list, optional
-        A list of types corresponding to each key in `keys`. If provided,
-        the function will also check that the values associated with each key
-        are of the specified type.
-    ret_val : bool, optional
-        If True, the function will return the values associated with the keys
-        in the same order as the keys. Default is False.
-    Raises
-    ------
-    ValueError
-        If any of the specified keys are missing from the dictionary.
-    """
-    if not isinstance(d, dict):
-        raise TypeError("Input must be a dictionary.")
-    if not isinstance(keys, list):
-        raise TypeError("Expected keys must be provided as a list.")
-
-    missing_keys = [key for key in keys if key not in d]
-    if missing_keys:
-        missing_keys_str = ", ".join(missing_keys)
-        given_keys_str = ", ".join(d.keys())
-        raise ValueError(
-            f"Missing keys: '{missing_keys_str}'\nGiven keys: '{given_keys_str}'"
-        )
-    if val_types is None:
-        val_types = [None] * len(keys)
-    if len(keys) != len(val_types):
-        raise ValueError("Length of keys and val_types must match.")
-    for key, val_type in zip(keys, val_types):
-        if val_type is None:
-            continue
-        if not isinstance(d[key], val_type):
-            raise TypeError(
-                f"Value for key '{key}' must be of type {val_type.__name__}, "
-                f"but got {type(d[key]).__name__}."
-            )
-
-    if val_ranges is None:
-        val_ranges = [None] * len(keys)
-    if len(keys) != len(val_ranges):
-        raise ValueError("Length of keys and val_ranges must match.")
-    for key, val_range in zip(keys, val_ranges):
-        if val_range is None:
-            continue
-        if d[key] < val_range[0] or d[key] > val_range[1]:
-            raise ValueError(
-                f"Value for key '{key}' must be between {val_range[0]}, and "
-                f"{val_range[1]}, but got {d[key]}"
-            )
-
-    if ret_val:
-        return tuple(d[key] for key in keys)
+    fig, ax = plt.subplots(2, 1, figsize=(18, 6))
+    f_hist = getattr(sol, "f_history", None)
+    g_hist = getattr(sol, "g_norm_history", None)
+    if f_hist is not None and len(f_hist) > 0:
+        n = list(range(len(f_hist)))
+        ax[0].plot(n, f_hist, color='r', label="Function Values")
+        ax[0].legend()
+        ax[0].set_xlabel("Iteration")
+        ax[0].set_ylabel("Function Values")
+        if any(val > 0 for val in f_hist):
+            ax[0].set_yscale('log')
+    if g_hist is not None and len(g_hist) > 0:
+        n = list(range(len(g_hist)))
+        ax[1].plot(n, g_hist, color='k', label="Gradient Norms")
+        ax[1].legend()
+        ax[1].set_xlabel("Iteration")
+        ax[1].set_ylabel("Gradient Norms")
+        if any(val > 0 for val in g_hist):
+            ax[1].set_yscale('log')
+    if f_path is not None:
+        fig.savefig(f_path)
+    else:
+        plt.show()
+    plt.close(fig)

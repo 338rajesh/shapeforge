@@ -8,24 +8,37 @@ Available Algorithms
 
 from collections import deque
 from dataclasses import dataclass
-from typing import Optional, Literal
+from typing import Literal
 
 import numpy as np
+import numpy.typing as npt
+from gbox.core.utils import Validator
 
 
 class OptimisationProblem:
-    def __init__(self, params: Optional[dict] = None):
-        pass
-        self.params = params or {}
-        self.eval_count = {"f_and_g": 0, "proj": 0}
+    __slots__ = ("_eval_count", "_x0")
 
-    def f_and_grad(self, x: np.ndarray) -> float:
+    def __init__(self):
+        self._x0: np.ndarray = None
+        self._eval_count = {"func": 0, "grad": 0, "proj": 0}
+
+    def func(self, x: np.ndarray, *args, **kwargs) -> float:
         """
-        Evaluate the objective function and its gradient
+        Evaluate the objective function
         """
+        if hasattr(self, "f") and callable(self.f):
+            return self.f(x, *args, **kwargs)
         raise NotImplementedError(
-            "Objective function and gradient evaluation not implemented. "
+            "Objective function evaluation not implemented. "
         )
+
+    def grad(self, x: np.ndarray, *args, **kwargs) -> npt.NDArray[np.float32]:
+        """
+        Evaluate the objective gradient
+        """
+        if hasattr(self, "grad_f") and callable(self.grad_f):
+            return self.grad_f(x, *args, **kwargs)
+        raise NotImplementedError("Gradient evaluation not implemented. ")
 
     def projection(self, x: np.ndarray) -> np.ndarray:
         """
@@ -33,21 +46,28 @@ class OptimisationProblem:
         """
         raise NotImplementedError("Projection function not implemented.")
 
+    def solve(self, method: str = "nmspg", **options):
+        method = Validator.as_string(method).lower()
+        if method == "nmspg":
+            return nmspg(self, self.x0, **options)
+        else:
+            raise ValueError(f"Unknown optimisation method '{method}'")
 
-@dataclass
+
+@dataclass(slots=True, frozen=True)
 class OptimisationResult:
     x_optimal: np.ndarray
     status: Literal["success", "failure"] = "success"
-    failure_message: Optional[str] = None
-    f_history: Optional[list] = None
-    g_norm_history: Optional[list] = None
+    failure_message: str | None = None
+    f_history: list | None = None
+    g_norm_history: list | None = None
     iter_count: int = 0
-    f_and_g_eval_count: int = 0
+    f_eval_count: int = 0
+    g_eval_count: int = 0
     proj_eval_count: int = 0
 
     def __post_init__(self):
         n = self.iter_count
-        self.x_optimal = np.array(self.x_optimal)
         if self.f_history and (not len(self.f_history) == n + 1):
             raise ValueError("Length of f_history must match iter_count.")
         if self.g_norm_history and (not len(self.g_norm_history) == n + 1):
@@ -55,9 +75,10 @@ class OptimisationResult:
 
     def to_dict(self) -> dict:
         return {
-            "x_optimal": self.x_optimal,
+            "x_optimal": self.x_optimal.tolist(),
             "iter_count": self.iter_count,
-            "f_and_g_eval_count": self.f_and_g_eval_count,
+            "f_eval_count": self.f_eval_count,
+            "g_eval_count": self.g_eval_count,
             "f_history": self.f_history,
             "g_norm_history": self.g_norm_history,
             "proj_eval_count": self.proj_eval_count,
@@ -121,7 +142,7 @@ def nmspg(
         """
         x_trial = x_ - ssl_ * g_
         d_ = objective.projection(x_trial) - x_
-        objective.eval_count["proj"] += 1
+        objective._eval_count["proj"] += 1
         return d_
 
     def d_inf_norm(x_: np.ndarray, g_: np.ndarray, ssl_: float = 1.0) -> bool:
@@ -154,7 +175,8 @@ def nmspg(
             return spectral_step_max
 
     x_k = np.array(x0, dtype=np.float32).copy()
-    f_k, g_k = objective.f_and_grad(x_k)
+    f_k = objective.func(x_k)
+    g_k = objective.grad(x_k)
     f_history = [f_k]
     g_norm_history = [np.linalg.norm(g_k, ord=np.inf)]
 
@@ -168,12 +190,19 @@ def nmspg(
         # --------------------------------------------
         #       Check convergence
         # --------------------------------------------
-        if d_inf_norm(x_k, g_k, ssl_=1.0) <= epsilon:
+        d_inf_norm_k = d_inf_norm(x_k, g_k, ssl_=1.0)
+        if d_inf_norm_k <= epsilon:
             status = "success"
             break
 
-        if p_bar is not None:
-            print(f"Iteration {k + 1}/{iter_max}, f: {f_k:.6f}", end="\r")
+        if p_bar:
+            print(
+                f"[Iteration {k + 1}/{iter_max}]"
+                f"[d_inf_norm: {d_inf_norm_k:.4g}]"
+                f"[f: {f_k:.4g}]"
+                f"[g_norm: {g_norm_history[-1]:.4g}]",
+                end="\r",
+            )
 
         # --------------------------------------------
         #       Get the search direction, d_k
@@ -190,7 +219,7 @@ def nmspg(
         slope_local = np.dot(g_k, d_k)
         while True:
             x_trial = x_k + alpha * d_k
-            f_trial, _ = objective.f_and_grad(x_trial)
+            f_trial = objective.func(x_trial)
 
             # terminate if reached the max number of line search iterations
             if ls_iter >= ls_iter_max:
@@ -218,7 +247,7 @@ def nmspg(
         #       Update the point, x_k
         # --------------------------------------------
         x_kp1 = x_trial
-        _, g_kp1 = objective.f_and_grad(x_kp1)
+        g_kp1 = objective.grad(x_kp1)
 
         # ---------------------------------------------
         #       Compute the spectral step length
@@ -246,12 +275,13 @@ def nmspg(
         )
 
     return OptimisationResult(
-        x_optimal=x_k.tolist(),
+        x_optimal=np.asarray(x_k),
         status=status,
         failure_message=failure_message,
-        f_history=f_history,
+        f_history=[float(i) for i in f_history],
         g_norm_history=g_norm_history,
         iter_count=k,
-        f_and_g_eval_count=objective.eval_count["f_and_g"],
-        proj_eval_count=objective.eval_count["proj"],
+        f_eval_count=objective._eval_count["func"],
+        g_eval_count=objective._eval_count["grad"],
+        proj_eval_count=objective._eval_count["proj"],
     )
