@@ -28,12 +28,12 @@ domain:
 # ----------------------------------------------------------------------------
 shapes:
   - name: Circle
-    volume_fraction: 0.7
+    volume_fraction: 0.30
     params:
       # params might be constant or might follow a distribution. Constant
       # values can be passed as float values, while the params with a
       # distribution must be defined with "distr_name(loc, scale)" signature
-      radius: 2.0  # uniform(1, 0.0)
+      radius: 1.0  # uniform(1, 0.0)
 
 # ----------------------------------------------------------------------------
 # Packing 

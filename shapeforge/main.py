@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-import gbox as gb
+# import gbox as gb
 import numpy as np
 from gbox.shapes.shapes_2d import Shape2DPose
 
@@ -18,15 +18,9 @@ logger = get_logger(__name__)
 SCRATCH_DIR = Path("/home/rajesh/workshop/repos/shapeforge/scratch")
 
 
-def generate_cell_2d(
-    config: dict[str, Any] | str | Path,
+def _generate_cell_2d_core(
+    cfg: ShapeForgeConfig,
 ) -> Sequence[tuple[Cell, Cell]]:
-    """
-    Generate a unit cell with the specified configuration.
-    """
-    logger.info("Starting the cell 2D genration...")
-    config_dict = _load_dict(config)
-    cfg = ShapeForgeConfig.from_dict(config_dict)
     cells: list[tuple[Cell, Cell]] = [
         (None, None) for _ in range(cfg.num_cells)
     ]
@@ -68,36 +62,11 @@ def generate_cell_2d(
             cell.domain, cell.shapes, buffer_thickness_ratio=0.05
         )
 
-        a_ca = [a_shape.union_of_circles() for a_shape in cell.shapes]
-
-        b_ca: list[gb.CirclesArray] = []
-        xyo_matrix = overlap_problem._as_matrix(overlap_problem.x0)
-        _radii = [s.equivalent_circle_radius for s in cell.shapes]
-        for i in range(overlap_problem.num_inclusions):
-            xs, ys, _ = xyo_matrix.T
-            b_ca.append(
-                gb.CirclesArray.from_circles(
-                    [gb.Circle(float(_radii[i]), (float(xs[i]), float(ys[i])))]
-                )
-            )
-
-        _x0 = overlap_problem.x0
-        import json
-
-        with open(SCRATCH_DIR.joinpath(f"x0_{index}.json"), "w") as f:
-            json.dump(
-                {
-                    "x0_flat": _x0.tolist(),
-                    "x0_matrix": overlap_problem._as_matrix(_x0).tolist(),
-                },
-                f,
-                indent=4,
-            )
-
         solution = overlap_problem.solve(**solver_options)
 
-        print(
-            f"\n\n[status: {solution.status}]"
+        print()
+        logger.info(
+            f"[status: {solution.status}]"
             f"[iter count: {solution.iter_count}]"
             f"[Time: {(time.perf_counter() - t0):4.3f}sec]"
         )
@@ -119,14 +88,64 @@ def generate_cell_2d(
     return cells
 
 
-def build_parser() -> argparse.Namespace:
+def generate_cell_2d(
+    config: dict[str, Any] | str | Path,
+    *,
+    profile: bool = False,
+    profile_output: str | Path | None = None,
+    profile_lines: int = 25,
+    profile_sort: str = "cumulative",
+) -> Sequence[tuple[Cell, Cell]]:
+    """
+    Generate a unit cell with the specified configuration.
+
+    Parameters
+    ----------
+    config : dict | str | Path
+        Configuration mapping or path to YAML/JSON configuration file.
+    profile : bool, optional
+        Whether to profile the cell generation run (default: False).
+    profile_output : str | Path | None, optional
+        Destination file path for the .prof binary profile data. If None,
+        defaults to '<export.output_dir>/shapeforge.prof'.
+    profile_lines : int, optional
+        Number of hotspot entries to display in the terminal summary (default: 25).
+    profile_sort : str, optional
+        Sort criterion for profiling stats: 'cumulative', 'time', or 'calls'
+        (default: 'cumulative').
+    """
+    logger.info("Starting the cell 2D generation...")
+    config_dict = _load_dict(config)
+    cfg = ShapeForgeConfig.from_dict(config_dict)
+
+    if profile:
+        from .profiler import Profiler
+
+        if profile_output is None:
+            profile_output = Path(cfg.export.output_dir) / "shapeforge.prof"
+
+        with Profiler(
+            output_path=profile_output,
+            top_n=profile_lines,
+            sort_by=profile_sort,
+            print_summary=True,
+        ):
+            return _generate_cell_2d_core(cfg)
+    else:
+        return _generate_cell_2d_core(cfg)
+
+
+def build_parser() -> argparse.ArgumentParser:
     _log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
-    parser = argparse.ArgumentParser(description=("ShapeForge CLI"))
+    parser = argparse.ArgumentParser(
+        prog="shapeforge",
+        description="ShapeForge: RVE and Unit Cell Generation Engine",
+    )
     parser.add_argument(
         "config_file",
         type=str,
-        help="Path to the YAML configuration file for the shape forge.",
+        help="Path to the YAML configuration file for ShapeForge.",
     )
     parser.add_argument(
         "--log",
@@ -134,13 +153,44 @@ def build_parser() -> argparse.Namespace:
         choices=_log_levels + list(map(str.lower, _log_levels)),
         help="Set the logging level (default: WARNING)",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Profile execution with cProfile to identify performance bottlenecks.",
+    )
+    parser.add_argument(
+        "--profile-output",
+        type=str,
+        default=None,
+        help="Destination path for .prof profiling output file (default: <output_dir>/shapeforge.prof).",
+    )
+    parser.add_argument(
+        "--profile-lines",
+        type=int,
+        default=25,
+        help="Number of hotspot lines to show in the console summary (default: 25).",
+    )
+    parser.add_argument(
+        "--profile-sort",
+        type=str,
+        choices=["cumulative", "time", "calls"],
+        default="cumulative",
+        help="Sort metric for the profiling summary (default: cumulative).",
+    )
+    return parser
 
 
 def main():
-    args = build_parser()
+    parser = build_parser()
+    args = parser.parse_args()
     logger.setLevel(args.log.upper())
-    generate_cell_2d(args.config_file)
+    generate_cell_2d(
+        args.config_file,
+        profile=args.profile,
+        profile_output=args.profile_output,
+        profile_lines=args.profile_lines,
+        profile_sort=args.profile_sort,
+    )
 
 
 if __name__ == "__main__":

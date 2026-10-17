@@ -36,6 +36,7 @@ dev = [
     "ipykernel~=7.3",
     "ipython~=9.17",
     "pytest~=9.1",
+    "snakeviz>=2.2.2",
 ]
 
 [project.urls]

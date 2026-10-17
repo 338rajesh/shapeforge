@@ -24,24 +24,29 @@ class OptimisationProblem:
 
     def func(self, x: np.ndarray, *args, **kwargs) -> float:
         """
-        Evaluate the objective function and its gradient
+        Evaluate the objective function
         """
+        if hasattr(self, "f") and callable(self.f):
+            return self.f(x, *args, **kwargs)
         raise NotImplementedError(
-            "Objective function and gradient evaluation not implemented. "
+            "Objective function evaluation not implemented. "
         )
 
     def grad(self, x: np.ndarray, *args, **kwargs) -> npt.NDArray[np.float32]:
         """
-        Evaluate the objective function and its gradient
+        Evaluate the objective gradient
         """
+        if hasattr(self, "grad_f") and callable(self.grad_f):
+            return self.grad_f(x, *args, **kwargs)
         raise NotImplementedError(
-            "Objective function and gradient evaluation not implemented. "
+            "Gradient evaluation not implemented. "
         )
 
     def update_x(self, x_new: np.ndarray) -> None:
-        raise NotImplementedError(
-            "Sub-classes must implement method to update the position"
-        )
+        """
+        Optional hook for sub-classes to update internal state when position changes.
+        """
+        pass
 
     def projection(self, x: np.ndarray) -> np.ndarray:
         """
