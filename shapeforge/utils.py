@@ -171,20 +171,22 @@ def plot_f_and_g_norms(sol, f_path: Path | None = None):
     fig, ax = plt.subplots(2, 1, figsize=(18, 6))
     f_hist = getattr(sol, "f_history", None)
     g_hist = getattr(sol, "g_norm_history", None)
-    if f_hist is not None:
+    if f_hist is not None and len(f_hist) > 0:
         n = list(range(len(f_hist)))
         ax[0].plot(n, f_hist, color='r', label="Function Values")
         ax[0].legend()
         ax[0].set_xlabel("Iteration")
         ax[0].set_ylabel("Function Values")
-        ax[0].set_yscale('log')
-    if g_hist is not None:
+        if any(val > 0 for val in f_hist):
+            ax[0].set_yscale('log')
+    if g_hist is not None and len(g_hist) > 0:
         n = list(range(len(g_hist)))
         ax[1].plot(n, g_hist, color='k', label="Gradient Norms")
         ax[1].legend()
         ax[1].set_xlabel("Iteration")
         ax[1].set_ylabel("Gradient Norms")
-        ax[1].set_yscale('log')
+        if any(val > 0 for val in g_hist):
+            ax[1].set_yscale('log')
     if f_path is not None:
         fig.savefig(f_path)
     else:

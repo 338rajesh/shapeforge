@@ -36,6 +36,7 @@ dev = [
     "ipykernel~=7.3",
     "ipython~=9.17",
     "pytest~=9.1",
+    "pytest-cov>=6.0",
     "snakeviz>=2.2.2",
 ]
 
@@ -53,6 +54,3 @@ shapeforge = "shapeforge.main:main"
 [tool.setuptools.packages.find]
 # exclude any top-level dirs that should not be packaged (e.g. scratch)
 exclude = ["scratch", ".venv", ".git", "__pycache__", "build", "dist"]
-
-[tool.uv.sources]
-gbox = { path = "../gbox" }
