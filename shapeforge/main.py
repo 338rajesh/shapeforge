@@ -1,12 +1,12 @@
 import argparse
+import logging
 import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-# import gbox as gb
+import gbox as gb
 import numpy as np
-from gbox.shapes.shapes_2d import Shape2DPose
 
 from .cell import Cell, CellDomain2D, initialise_shapes_2d
 from .config import ShapeForgeConfig
@@ -15,15 +15,22 @@ from .utils import _load_dict, get_logger, plot_f_and_g_norms
 
 logger = get_logger(__name__)
 
-SCRATCH_DIR = Path("/home/rajesh/workshop/repos/shapeforge/scratch")
-
 
 def _generate_cell_2d_core(
     cfg: ShapeForgeConfig,
 ) -> Sequence[tuple[Cell, Cell]]:
+    if cfg.packing.periodicity:
+        raise NotImplementedError(
+            "Periodic packing is not yet supported in 2D cell generation."
+        )
+
+    out_dir = Path(cfg.export.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     cells: list[tuple[Cell, Cell]] = [
         (None, None) for _ in range(cfg.num_cells)
     ]
+
     solver_options = {
         "method": "nmspg",
         "iter_max": 1000,
@@ -37,29 +44,100 @@ def _generate_cell_2d_core(
         "ls_iter_max": 20,
         "p_bar": True,
     }
+    opt_user_cfg = dict(cfg.solver.optimiser)
+    if "name" in opt_user_cfg:
+        solver_options["method"] = opt_user_cfg.pop("name")
+    if "max_iter" in opt_user_cfg:
+        solver_options["iter_max"] = opt_user_cfg.pop("max_iter")
+    solver_options.update(opt_user_cfg)
+
+    plot_kwargs = {
+        "size": cfg.export.image_dimensions,
+        "background": cfg.export.background,
+        "foreground": cfg.export.facecolor,
+        "dpi": cfg.export.dpi,
+    }
+
+    img_formats = [
+        fmt
+        for fmt in cfg.export.formats
+        if fmt.lower() in ("png", "jpg", "jpeg", "pdf")
+    ]
+    data_formats = [
+        fmt
+        for fmt in cfg.export.formats
+        if fmt.lower() in ("json", "yaml", "yml", "pkl", "pickle", "npz")
+    ]
+
+    logger.info(f"Running ShapeForge task: {cfg.metadata.title}")
+
     for index in range(cfg.num_cells):
         t0 = time.perf_counter()
         rng_seed = cfg.metadata.rng_seed + index
+        rng = np.random.default_rng(seed=rng_seed)
         logger.info(f"Generating cell {index} with seed {rng_seed}")
 
         cell_domain = CellDomain2D(bounds=cfg.domain.bounds)
         logger.debug("  Domain of cell is created")
 
         shapes = initialise_shapes_2d(
-            cell_domain, cfg.shapes, rng=np.random.default_rng(seed=rng_seed)
+            cell_domain,
+            cfg.shapes,
+            rng=rng,
+            init_method=cfg.solver.init_method,
         )
         logger.debug(f"  Cell is initialised with {len(shapes)} shapes.")
+
+        if cfg.packing.adjust_bounds_to_exact_vf:
+            target_vf = sum(s.volume_fraction for s in cfg.shapes)
+            if target_vf > 0.0:
+                actual_area = shapes.area
+                required_domain_area = actual_area / target_vf
+                scale = np.sqrt(required_domain_area / cell_domain.area)
+                x_min, x_max = cell_domain.x_bounds
+                y_min, y_max = cell_domain.y_bounds
+                new_x_max = x_min + (x_max - x_min) * scale
+                new_y_max = y_min + (y_max - y_min) * scale
+                cell_domain = CellDomain2D(
+                    gb.Bounds2DRectangular(x_min, y_min, new_x_max, new_y_max)
+                )
+                logger.debug(
+                    f"  Adjusted domain bounds to {cell_domain.domain} "
+                    f"for exact volume fraction {target_vf:.4f}"
+                )
 
         cell = Cell(cell_domain, shapes)
         logger.debug("  Cell object containing shapes and domain is created")
 
         initial_copy = cell.clone()
-        initial_copy.plot(f_path=SCRATCH_DIR.joinpath(f"initial_{index}.png"))
+
+        # Render/export initial cell
+        initial_arr = None
+        for fmt in img_formats:
+            initial_arr = initial_copy.plot(
+                f_path=out_dir / f"initial_{index}.{fmt}", **plot_kwargs
+            )
+        if initial_arr is None and cfg.export.as_array:
+            initial_arr = initial_copy.plot(f_path=None, **plot_kwargs)
+
+        for fmt in data_formats:
+            initial_copy.save(
+                f_path=out_dir / f"initial_{index}.{fmt}", overwrite=True
+            )
+
         logger.debug("  A copy of the cell is created for comparison")
 
         # Solving the overlap
         overlap_problem = CellShapes2DOverlap(
-            cell.domain, cell.shapes, buffer_thickness_ratio=0.05
+            cell.domain,
+            cell.shapes,
+            buffer_thickness_ratio=cfg.packing.min_gap_ratio,
+            proj_buffer_ratio=(
+                cfg.packing.proj_buffer_ratio
+                if cfg.packing.proj_buffer_ratio is not None
+                else 2.0
+            ),
+            rng=rng,
         )
 
         solution = overlap_problem.solve(**solver_options)
@@ -75,13 +153,26 @@ def _generate_cell_2d_core(
         positions = overlap_problem._as_matrix(solution.x_optimal)
         cell.shapes.set_positions(positions)
 
-        cell.plot(f_path=SCRATCH_DIR.joinpath(f"final_{index}.png"))
-        # cell.save(
-        #     f_path=SCRATCH_DIR.joinpath(f"final_{index}.json"), overwrite=True
-        # )
+        final_arr = None
+        for fmt in img_formats:
+            final_arr = cell.plot(
+                f_path=out_dir / f"final_{index}.{fmt}", **plot_kwargs
+            )
+        if final_arr is None and cfg.export.as_array:
+            final_arr = cell.plot(f_path=None, **plot_kwargs)
+
+        for fmt in data_formats:
+            cell.save(f_path=out_dir / f"final_{index}.{fmt}", overwrite=True)
+
+        if cfg.export.as_array:
+            if initial_arr is not None:
+                np.save(out_dir / f"initial_{index}.npy", initial_arr)
+            if final_arr is not None:
+                np.save(out_dir / f"final_{index}.npy", final_arr)
+
         plot_f_and_g_norms(
             sol=solution,
-            f_path=SCRATCH_DIR.joinpath(f"fg_variation_{index}.png"),
+            f_path=out_dir / f"fg_variation_{index}.png",
         )
         cells[index] = (initial_copy, cell)
     return cells
@@ -90,6 +181,7 @@ def _generate_cell_2d_core(
 def generate_cell_2d(
     config: dict[str, Any] | str | Path,
     *,
+    log_level: str | None = None,
     profile: bool = False,
     profile_output: str | Path | None = None,
     profile_lines: int = 25,
@@ -102,6 +194,8 @@ def generate_cell_2d(
     ----------
     config : dict | str | Path
         Configuration mapping or path to YAML/JSON configuration file.
+    log_level : str | None, optional
+        Logging level override (e.g. 'DEBUG', 'INFO'). If None, uses metadata.log_level from config.
     profile : bool, optional
         Whether to profile the cell generation run (default: False).
     profile_output : str | Path | None, optional
@@ -113,9 +207,14 @@ def generate_cell_2d(
         Sort criterion for profiling stats: 'cumulative', 'time', or 'calls'
         (default: 'cumulative').
     """
-    logger.info("Starting the cell 2D generation...")
     config_dict = _load_dict(config)
     cfg = ShapeForgeConfig.from_dict(config_dict)
+
+    effective_log_level = (log_level or cfg.metadata.log_level).upper()
+    logging.getLogger("shapeforge").setLevel(effective_log_level)
+    logger.setLevel(effective_log_level)
+
+    logger.info("Starting the cell 2D generation...")
 
     if profile:
         from .profiler import Profiler
@@ -148,9 +247,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--log",
-        default="WARNING",
+        default=None,
         choices=_log_levels + list(map(str.lower, _log_levels)),
-        help="Set the logging level (default: WARNING)",
+        help="Set the logging level (default: from config metadata.log_level, or WARNING)",
     )
     parser.add_argument(
         "--profile",
@@ -182,9 +281,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main():
     parser = build_parser()
     args = parser.parse_args()
-    logger.setLevel(args.log.upper())
     generate_cell_2d(
         args.config_file,
+        log_level=args.log,
         profile=args.profile,
         profile_output=args.profile_output,
         profile_lines=args.profile_lines,

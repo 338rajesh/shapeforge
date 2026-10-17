@@ -143,22 +143,9 @@ class DistributionSampler:
         return a
 
 
-def _load_dict(file_path: str | Path) -> dict:
-    """
-    Load a dictionary from a YAML/JSON file and optionally print its contents.
-
-    Parameters
-    ----------
-    file_path : str
-        The path to the YAML/JSON file.
-    show : bool, optional
-        If True, print the loaded configuration. Default is False.
-
-    Returns
-    -------
-    dict
-        The loaded dictionary.
-    """
+def _load_dict(file_path: str | Path | dict) -> dict:
+    if isinstance(file_path, dict):
+        return file_path
     fp = Validator.file_path(
         file_path, must_exist=True, extensions=[".json", ".yml", ".yaml"]
     )

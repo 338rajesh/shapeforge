@@ -14,6 +14,8 @@ class ShapesOverlap(OptimisationProblem):
         shapes: Inclusions,
         *,
         buffer_thickness_ratio: float = 0.05,
+        proj_buffer_ratio: float = 2.0,
+        rng: np.random.Generator | None = None,
     ):
         super().__init__()
         self.num_inclusions = len(shapes)
@@ -21,6 +23,9 @@ class ShapesOverlap(OptimisationProblem):
 
         self.shapes = shapes
         self.domain = domain
+        self.buffer_thickness_ratio = buffer_thickness_ratio
+        self.proj_buffer_ratio = proj_buffer_ratio
+        self.rng = rng if rng is not None else np.random.default_rng()
 
     def _as_flat(self, x: np.ndarray) -> np.ndarray:
         return x.flatten(order="F")
@@ -52,9 +57,15 @@ class CellShapes2DOverlap(ShapesOverlap):
         shapes: Inclusions2D,
         *,
         buffer_thickness_ratio: float = 0.05,
+        proj_buffer_ratio: float = 2.0,
+        rng: np.random.Generator | None = None,
     ):
         super().__init__(
-            domain, shapes, buffer_thickness_ratio=buffer_thickness_ratio
+            domain,
+            shapes,
+            buffer_thickness_ratio=buffer_thickness_ratio,
+            proj_buffer_ratio=proj_buffer_ratio,
+            rng=rng,
         )
         equivalent_circle_radii = shapes.get_equivalent_circle_radii()
         self._ssd = equivalent_circle_radii * buffer_thickness_ratio
@@ -236,13 +247,19 @@ class CellShapes2DOverlap(ShapesOverlap):
         olb, oub = 0.0, 2.0 * PI
 
         for i in range(self.num_inclusions):
-            buf_len = 0.25 * (xub - xlb) * np.random.random()
+            buf_len = min(
+                self.proj_buffer_ratio * self._radii[i] * float(self.rng.random()),
+                0.5 * (xub - xlb),
+            )
             if positions[i, 0] > xub:
                 positions[i, 0] = xub - buf_len
             elif positions[i, 0] < xlb:
                 positions[i, 0] = xlb + buf_len
 
-            buf_len = 0.25 * (yub - ylb) * np.random.random()
+            buf_len = min(
+                self.proj_buffer_ratio * self._radii[i] * float(self.rng.random()),
+                0.5 * (yub - ylb),
+            )
             if positions[i, 1] > yub:
                 positions[i, 1] = yub - buf_len
             elif positions[i, 1] < ylb:

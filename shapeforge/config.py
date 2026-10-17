@@ -10,7 +10,18 @@ from gbox.shapes import SHAPES_2D_MAPPING as GBOX_2D_SHAPES_MAPPING
 
 from .utils import DistributionSpec, _load_dict
 
-ALLOWABLE_EXPORT_FORMATS = {"png", "jpg", "pdf", "json", "pkl", "yml", "npz"}
+ALLOWABLE_EXPORT_FORMATS = {
+    "png",
+    "jpg",
+    "jpeg",
+    "pdf",
+    "json",
+    "pkl",
+    "pickle",
+    "yml",
+    "yaml",
+    "npz",
+}
 
 
 # ============================================================================
@@ -234,10 +245,10 @@ class ExportConfig:
                 "image_dimensions",
                 "dpi",
             ],
-            types=[str, bool, Collection, int, int, Sequence, int],
+            types=[(str, Path), bool, Collection, int, int, Sequence, int],
             name="export",
         )
-
+        data = dict(data)
         data["output_dir"] = Validator.dir_path(data["output_dir"], mkdir=True)
 
         invalid_formats = [

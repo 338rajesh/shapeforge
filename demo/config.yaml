@@ -6,7 +6,7 @@
 # ----------------------------------------------------------------------------
 # Metadata & Execution
 # ----------------------------------------------------------------------------
-num_cells: 1
+num_cells: 2
 metadata:
   title: shapeforge-demo
   rng_seed: 42
@@ -42,7 +42,7 @@ shapes:
       # distribution must be defined with "distr_name(loc, scale)" signature
       semi_major_length: 2.0
       semi_minor_length: 1.0
-      major_axis_angle: uniform(0.0, 1.0)
+      major_axis_angle: uniform(0.0, 3.0)
 
 # ----------------------------------------------------------------------------
 # Packing
@@ -57,7 +57,7 @@ packing:
 # Solver & Optimization Engine Configuration
 # ----------------------------------------------------------------------------
 solver:
-  init_method: uniform # uniform | lhs | sobol
+  init_method: sobol # uniform | lhs | sobol
   optimiser:
     name: nmspg
     max_iter: 1000

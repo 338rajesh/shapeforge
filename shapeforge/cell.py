@@ -1,13 +1,16 @@
 import json
+import pickle
 from abc import ABC
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Self
+from typing import Any, Self
 
 import gbox as gb
 import numpy as np
+import yaml
+from scipy import stats
 
 from .config import ShapeConfig
 from .utils import (
@@ -19,6 +22,55 @@ from .utils import (
 )
 
 logger = get_logger(__name__)
+
+
+def _shape_to_dict(shape: gb.Shape2D) -> dict:
+    if type(shape) is gb.Circle:
+        return {
+            "shape": "circle",
+            "radius": float(shape.radius),
+            "centre": [float(c) for c in shape.centre],
+        }
+    elif isinstance(shape, gb.Ellipse):
+        return {
+            "shape": "ellipse",
+            "semi_major_length": float(shape.semi_major_length),
+            "semi_minor_length": float(shape.semi_minor_length),
+            "centre": [float(c) for c in shape.centre],
+            "major_axis_angle": [float(shape.position.orientation.radians), "rad"],
+        }
+    else:
+        d = shape.to_dict()
+        return {"shape": shape.__class__.__name__.lower(), **d}
+
+
+def _shape_from_dict(d: dict) -> gb.Shape2D:
+    shape_name = d.get("shape", "").lower()
+    if shape_name == "circle" or ("radius" in d and "semi_major_length" not in d):
+        return gb.Circle(
+            radius=float(d["radius"]),
+            centre=[float(c) for c in d.get("centre", (0.0, 0.0))],
+        )
+    elif shape_name == "ellipse":
+        major_axis_angle = d.get("major_axis_angle", 0.0)
+        if isinstance(major_axis_angle, (list, tuple)):
+            major_axis_angle = gb.Angle(
+                float(major_axis_angle[0]), str(major_axis_angle[1])
+            )
+        elif isinstance(major_axis_angle, (int, float)):
+            major_axis_angle = gb.Angle.rad(float(major_axis_angle))
+        return gb.Ellipse(
+            semi_major_length=float(d["semi_major_length"]),
+            semi_minor_length=float(d["semi_minor_length"]),
+            centre=[float(c) for c in d.get("centre", (0.0, 0.0))],
+            major_axis_angle=major_axis_angle,
+        )
+    else:
+        cls = gb.shapes.SHAPES_2D_MAPPING.get(shape_name)
+        if cls is None:
+            raise ValueError(f"Unknown shape type '{shape_name}'")
+        d_copy = {k: v for k, v in d.items() if k != "shape"}
+        return cls.from_dict(d_copy)
 
 
 class CellDomain(ABC):
@@ -52,7 +104,14 @@ class CellDomain2D(CellDomain):
     does not contain any by itself.
     """
 
-    def __init__(self, bounds: gb.Bounds2DRectangular | dict[str, float]):
+    def __init__(
+        self,
+        bounds: gb.Bounds2DRectangular | Mapping[str, float] | Sequence[float],
+    ):
+        if isinstance(bounds, Mapping):
+            bounds = gb.Bounds2DRectangular.from_mapping(bounds)
+        elif isinstance(bounds, Sequence) and not isinstance(bounds, gb.Bounds):
+            bounds = gb.Bounds2DRectangular.from_sequence(bounds)
         super().__init__(bounds)
 
     @property
@@ -199,19 +258,19 @@ class Inclusions2D(Inclusions):
     def to_dict(self) -> dict:
         return {
             "inclusions": [
-                inclusion.to_dict() for inclusion in self._inclusions
+                _shape_to_dict(inclusion) for inclusion in self._inclusions
             ]
         }
 
     @classmethod
-    def from_dict(self, d: dict) -> Self:
+    def from_dict(cls, d: dict) -> Self:
         d = Validator.as_dict(
             d, key_type_map={"inclusions": Sequence}, reject_extra_keys=True
         )
         inclusions = [
-            gb.Shape2D.from_dict(inclusion) for inclusion in d["inclusions"]
+            _shape_from_dict(inclusion) for inclusion in d["inclusions"]
         ]
-        return self.__class__(inclusions)
+        return cls(inclusions)
 
     def get_positions(self, flat: bool = False) -> np.ndarray:
         """Returns a numpy array of shape (N, 3) where N is the number of
@@ -272,14 +331,22 @@ class PositionSampler2D:
     xc_sampler: DistributionSampler | None = None
     yc_sampler: DistributionSampler | None = None
     orientation_sampler: DistributionSampler | float | None = None
+    qmc_sampler: Any | None = None
+    bounds: tuple[float, float, float, float] | None = None
 
     def sample(self) -> dict[str, float | gb.Angle]:
         out: dict[str, float | gb.Angle] = {}
-        if isinstance(self.xc_sampler, DistributionSampler):
-            out["xc"] = float(self.xc_sampler.sample())
+        if self.qmc_sampler is not None and self.bounds is not None:
+            pt = self.qmc_sampler.random(1)[0]
+            x_min, x_max, y_min, y_max = self.bounds
+            out["xc"] = float(x_min + pt[0] * (x_max - x_min))
+            out["yc"] = float(y_min + pt[1] * (y_max - y_min))
+        else:
+            if isinstance(self.xc_sampler, DistributionSampler):
+                out["xc"] = float(self.xc_sampler.sample())
 
-        if isinstance(self.yc_sampler, DistributionSampler):
-            out["yc"] = float(self.yc_sampler.sample())
+            if isinstance(self.yc_sampler, DistributionSampler):
+                out["yc"] = float(self.yc_sampler.sample())
 
         if isinstance(self.orientation_sampler, DistributionSampler):
             out["major_axis_angle"] = gb.Angle.rad(
@@ -409,6 +476,7 @@ def initialise_shapes_2d(
     cell_domain: CellDomain2D,
     shapes_config: Sequence[ShapeConfig],
     rng: np.random.Generator,
+    init_method: str = "uniform",
 ) -> Inclusions2D:
     """
     It is the main function to initialize inclusions based on the provided
@@ -426,6 +494,9 @@ def initialise_shapes_2d(
         volume fraction, and parameters for each inclusion type.
     rng: np.random.Generator
         A random number generator to ensure reproducibility.
+    init_method: str, optional
+        Sampling method for spatial positions: "uniform", "lhs", or "sobol"
+        (default: "uniform").
 
     Returns
     -------
@@ -434,6 +505,13 @@ def initialise_shapes_2d(
     """
     x_min, x_max = cell_domain.x_bounds
     y_min, y_max = cell_domain.y_bounds
+
+    qmc_sampler = None
+    method_lower = init_method.lower() if isinstance(init_method, str) else "uniform"
+    if method_lower in ("lhs", "latin_hypercube"):
+        qmc_sampler = stats.qmc.LatinHypercube(d=2, seed=rng)
+    elif method_lower in ("sobol", "sobol_sequence"):
+        qmc_sampler = stats.qmc.Sobol(d=2, seed=rng)
 
     inclusions = Inclusions2D()
     cum_vf = 0.0
@@ -484,6 +562,8 @@ def initialise_shapes_2d(
                 f"uniform({y_min}, {y_max - y_min})", rng=rng
             ),
             orientation_sampler=orientation_sampler,
+            qmc_sampler=qmc_sampler,
+            bounds=(x_min, x_max, y_min, y_max),
         )
 
         size_params_specs = _normalize_shape_size_params(
@@ -549,7 +629,10 @@ class Cell:
             reject_extra_keys=True,
             name=f"{cls.__name__}.from_dict.d",
         )
-        return cls(d["domain"], d["shapes"])
+        return cls(
+            CellDomain2D.from_dict(d["domain"]),
+            Inclusions2D.from_dict(d["shapes"]),
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -563,7 +646,9 @@ class Cell:
         Parameters
         ----------
         f_path: str or Path
-            Path to save the cell as a json file.
+            Path to save the cell file (.json, .yaml, .yml, .pkl, .pickle, .npz).
+        overwrite: bool, optional
+            Whether to overwrite an existing file (default: False).
 
         Returns
         -------
@@ -573,39 +658,84 @@ class Cell:
         f_path = Validator.file_path(
             f_path,
             must_exist=None if overwrite else False,
-            extensions=[".json"],
+            extensions=[".json", ".yaml", ".yml", ".pkl", ".pickle", ".npz"],
         )
-        with open(f_path, "w") as f:
-            json.dump(self.to_dict(), f, indent=4)
+        ext = f_path.suffix.lower()
+        if ext == ".json":
+            with open(f_path, "w") as f:
+                json.dump(self.to_dict(), f, indent=4)
+        elif ext in (".yaml", ".yml"):
+            with open(f_path, "w") as f:
+                yaml.safe_dump(self.to_dict(), f, sort_keys=False)
+        elif ext in (".pkl", ".pickle"):
+            with open(f_path, "wb") as f:
+                pickle.dump(self.to_dict(), f)
+        elif ext == ".npz":
+            positions = self.shapes.get_positions()
+            bounds_dict = self.domain.to_dict()["bounds"]
+            bounds_arr = np.array([
+                bounds_dict["x_min"],
+                bounds_dict["y_min"],
+                bounds_dict["x_max"],
+                bounds_dict["y_max"],
+            ])
+            np.savez(
+                f_path,
+                positions=positions,
+                bounds=bounds_arr,
+                cell_json=json.dumps(self.to_dict()),
+            )
         return f_path
 
     @classmethod
     def load(cls, f_path: str | Path) -> Self:
-        """Returns a new cell object with the configuration loaded from
-        a json file.
+        """Returns a new cell object with the configuration loaded from file.
 
         Parameters
         ----------
         f_path: str | Path
-            Path to the json file containing the cell configuration.
+            Path to the file containing the cell configuration.
 
         Returns
         -------
-        Cell2D
-            A new cell object with the configuration loaded from the json file.
+        Cell
+            A new cell object with the configuration loaded from the file.
         """
         f_path = Validator.file_path(
-            f_path, must_exist=True, extensions=[".json"]
+            f_path,
+            must_exist=True,
+            extensions=[".json", ".yaml", ".yml", ".pkl", ".pickle", ".npz"],
         )
-        with open(f_path, "r") as f:
-            data = json.load(f)
+        ext = f_path.suffix.lower()
+        if ext == ".json":
+            with open(f_path, "r") as f:
+                data = json.load(f)
+            return cls.from_dict(data)
+        elif ext in (".yaml", ".yml"):
+            with open(f_path, "r") as f:
+                data = yaml.safe_load(f)
+            return cls.from_dict(data)
+        elif ext in (".pkl", ".pickle"):
+            with open(f_path, "rb") as f:
+                data = pickle.load(f)
+            if isinstance(data, cls):
+                return data
+            return cls.from_dict(data)
+        elif ext == ".npz":
+            npz_data = np.load(f_path)
+            if "cell_json" in npz_data:
+                data = json.loads(str(npz_data["cell_json"]))
+                return cls.from_dict(data)
+            raise ValueError(
+                f"NPZ file {f_path} does not contain valid Cell data ('cell_json')"
+            )
+        else:
+            raise ValueError(f"Unsupported file format: {ext}")
 
-        return cls.from_dict(data)
-
-    def plot(self, f_path: str | Path, **kwargs) -> None:
-        """Plots the cell and saves the plot to specified file."""
+    def plot(self, f_path: str | Path | None = None, **kwargs) -> np.ndarray:
+        """Plots the cell, optionally saves the plot to specified file, and returns the rendered image array."""
         sp = gb.ShapesPlotter(**kwargs)
-        sp.plot(
+        return sp.plot(
             shapes=[i for i in self.shapes],
             bounds=self.domain.domain,
             path=f_path,
