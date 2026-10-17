@@ -28,15 +28,24 @@ domain:
 # ----------------------------------------------------------------------------
 shapes:
   - name: Circle
-    volume_fraction: 0.65
+    volume_fraction: 0.25
     params:
       # params might be constant or might follow a distribution. Constant
       # values can be passed as float values, while the params with a
       # distribution must be defined with "distr_name(loc, scale)" signature
-      radius: 1.0  # uniform(1, 0.0)
+      radius: 1.0 # uniform(1, 0.0)
+  - name: Ellipse
+    volume_fraction: 0.20
+    params:
+      # params might be constant or might follow a distribution. Constant
+      # values can be passed as float values, while the params with a
+      # distribution must be defined with "distr_name(loc, scale)" signature
+      semi_major_length: 2.0
+      semi_minor_length: 1.0
+      major_axis_angle: uniform(0.0, 1.0)
 
 # ----------------------------------------------------------------------------
-# Packing 
+# Packing
 # ----------------------------------------------------------------------------
 packing:
   periodicity: false
@@ -53,7 +62,6 @@ solver:
     name: nmspg
     max_iter: 1000
     epsilon: 1.0e-6
-
 
 # ----------------------------------------------------------------------------
 # Export & Visualization Outputs

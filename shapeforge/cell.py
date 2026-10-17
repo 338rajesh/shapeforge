@@ -10,7 +10,13 @@ import gbox as gb
 import numpy as np
 
 from .config import ShapeConfig
-from .utils import DistributionSampler, DistributionSpec, Validator, get_logger
+from .utils import (
+    PI,
+    DistributionSampler,
+    DistributionSpec,
+    Validator,
+    get_logger,
+)
 
 logger = get_logger(__name__)
 
@@ -186,7 +192,9 @@ class Inclusions2D(Inclusions):
 
     def clone(self) -> Self:
         """Create a deep copy of this instance."""
-        return self.__class__(self._inclusions)
+        return self.__class__(
+            [inclusion.clone() for inclusion in self._inclusions]
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -214,10 +222,7 @@ class Inclusions2D(Inclusions):
         orientations.
         """
         positions = np.array(
-            [
-                inclusion.position.to_tuple()
-                for inclusion in self._inclusions
-            ]
+            [inclusion.position.to_tuple() for inclusion in self._inclusions]
         )
         return positions.flatten(order="F") if flat else positions
 
@@ -235,9 +240,9 @@ class Inclusions2D(Inclusions):
         for i in range(num_inclusions):
             self._inclusions[i].position = gb.shapes_2d.Shape2DPose.from_dict(
                 {
-                    "x": xyo[i, 0],
-                    "y": xyo[i, 1],
-                    "orientation": gb.Angle.rad(0.0),
+                    "x": float(xyo[i, 0]),
+                    "y": float(xyo[i, 1]),
+                    "orientation": gb.Angle.rad(float(xyo[i, 2])),
                 }
             )
 
@@ -266,35 +271,47 @@ class Inclusions2D(Inclusions):
 class PositionSampler2D:
     xc_sampler: DistributionSampler | None = None
     yc_sampler: DistributionSampler | None = None
-    orientation_sampler: DistributionSampler | None = None
+    orientation_sampler: DistributionSampler | float | None = None
 
     def sample(self) -> dict[str, float | gb.Angle]:
-        out = {}
+        out: dict[str, float | gb.Angle] = {}
         if isinstance(self.xc_sampler, DistributionSampler):
-            out["xc"] = self.xc_sampler.sample()
+            out["xc"] = float(self.xc_sampler.sample())
 
         if isinstance(self.yc_sampler, DistributionSampler):
-            out["yc"] = self.yc_sampler.sample()
+            out["yc"] = float(self.yc_sampler.sample())
 
         if isinstance(self.orientation_sampler, DistributionSampler):
             out["major_axis_angle"] = gb.Angle.rad(
-                self.orientation_sampler.sample()
+                float(self.orientation_sampler.sample())
+            )
+        elif isinstance(self.orientation_sampler, (int, float)):
+            out["major_axis_angle"] = gb.Angle.rad(
+                float(self.orientation_sampler)
             )
 
         return out
 
 
 class Inclusion2DSampler:
-    __slots__ = ("_pos_sampler", "_shape", "_size_samplers")
+    __slots__ = ("_is_circular", "_pos_sampler", "_shape", "_size_samplers")
 
     def __init__(
         self,
-        shape: str,
-        pos_sampler: DistributionSampler,
+        shape: str | type[gb.Shape2D],
+        pos_sampler: PositionSampler2D,
         size_samplers: dict[str, float | DistributionSampler],
     ):
-        shape = Validator.as_string(shape).lower()
-        gb_shape = gb.shapes.SHAPES_2D_MAPPING[shape]
+        if isinstance(shape, str):
+            shape_str = Validator.as_string(shape).lower()
+            gb_shape = gb.shapes.SHAPES_2D_MAPPING[shape_str]
+        elif isinstance(shape, type) and issubclass(shape, gb.Shape2D):
+            gb_shape = shape
+        else:
+            raise TypeError(
+                f"Unsupported shape type: {type(shape).__name__}. "
+                "Expected str or gb.Shape2D subclass."
+            )
 
         # check if g_shape has a method called from_params
         if not hasattr(gb_shape, "from_params") or not callable(
@@ -304,21 +321,88 @@ class Inclusion2DSampler:
                 f"Unsupported shape: {shape}, must have a from_params method"
             )
 
-        self._shape: gb.Shape2D = gb_shape
+        self._shape: type[gb.Shape2D] = gb_shape
         self._pos_sampler = pos_sampler
         self._size_samplers = Validator.as_dict(size_samplers)
+        self._is_circular = issubclass(gb_shape, gb.Circle)
 
     def sample(self) -> gb.Shape2D:
         pos_params = self._pos_sampler.sample()
+        if self._is_circular:
+            # Circle only expects xc and yc, rejects major_axis_angle
+            pos_params = {
+                "xc": float(pos_params["xc"]),
+                "yc": float(pos_params["yc"]),
+            }
+        else:
+            # Non-circular shapes require orientation (major_axis_angle)
+            if "major_axis_angle" not in pos_params:
+                pos_params["major_axis_angle"] = gb.Angle.rad(
+                    float(np.random.uniform(0.0, 2.0 * PI))
+                )
+
         size_params = {}
         for k, v in self._size_samplers.items():
             if isinstance(v, (int, float)):
-                size_params[k] = v
+                size_params[k] = float(v)
             else:
-                size_params[k] = v.sample()
+                size_params[k] = float(v.sample())
+
         return self._shape.from_params(
             position_params=pos_params, size_params=size_params
         )
+
+
+def _normalize_shape_size_params(shape_name: str, params: dict) -> dict:
+    """Normalize shape size parameter keys and aliases."""
+    normalized: dict = {}
+    if shape_name == "circle":
+        for k, v in params.items():
+            if k in ("radius", "r"):
+                normalized["radius"] = v
+            else:
+                normalized[k] = v
+    elif shape_name == "ellipse":
+        for k, v in params.items():
+            if k in (
+                "semi_major_length",
+                "semi_major_axis",
+                "major_axis",
+                "major_radius",
+                "a",
+            ):
+                normalized["semi_major_length"] = v
+            elif k in (
+                "semi_minor_length",
+                "semi_minor_axis",
+                "minor_axis",
+                "minor_radius",
+                "b",
+            ):
+                normalized["semi_minor_length"] = v
+            else:
+                normalized[k] = v
+
+        # Compute missing axis from aspect_ratio if provided
+        ar = normalized.pop("aspect_ratio", None) or normalized.pop("ar", None)
+        if ar is not None and isinstance(ar, (int, float)):
+            if (
+                "semi_major_length" in normalized
+                and "semi_minor_length" not in normalized
+            ):
+                val = normalized["semi_major_length"]
+                if isinstance(val, (int, float)):
+                    normalized["semi_minor_length"] = float(val) / float(ar)
+            elif (
+                "semi_minor_length" in normalized
+                and "semi_major_length" not in normalized
+            ):
+                val = normalized["semi_minor_length"]
+                if isinstance(val, (int, float)):
+                    normalized["semi_major_length"] = float(val) * float(ar)
+    else:
+        normalized = dict(params)
+    return normalized
 
 
 def initialise_shapes_2d(
@@ -351,15 +435,6 @@ def initialise_shapes_2d(
     x_min, x_max = cell_domain.x_bounds
     y_min, y_max = cell_domain.y_bounds
 
-    pos_sampler = PositionSampler2D(
-        xc_sampler=DistributionSampler.from_signature(
-            f"uniform({x_min}, {x_max - x_min})", rng=rng
-        ),
-        yc_sampler=DistributionSampler.from_signature(
-            f"uniform({y_min}, {y_max - y_min})", rng=rng
-        ),
-    )
-
     inclusions = Inclusions2D()
     cum_vf = 0.0
     for a_shape_cfg in shapes_config:
@@ -369,10 +444,56 @@ def initialise_shapes_2d(
                 "Cumulative volume fraction of given shapes exceeds 1.0."
             )
 
+        shape_name = Validator.as_string(a_shape_cfg.name).lower()
+        gb_shape_cls = gb.shapes.SHAPES_2D_MAPPING[shape_name]
+        is_circular = issubclass(gb_shape_cls, gb.Circle)
+
+        # Separate orientation parameters from size parameters
+        raw_params = dict(a_shape_cfg.params)
+        orientation_spec = None
+        for ori_key in ("major_axis_angle", "orientation", "angle", "theta"):
+            if ori_key in raw_params:
+                orientation_spec = raw_params.pop(ori_key)
+                break
+
+        # Setup orientation sampler
+        orientation_sampler = None
+        if not is_circular:
+            if orientation_spec is not None:
+                if isinstance(orientation_spec, (int, float)):
+                    orientation_sampler = float(orientation_spec)
+                elif isinstance(orientation_spec, DistributionSpec):
+                    orientation_sampler = DistributionSampler(
+                        orientation_spec, rng
+                    )
+                elif isinstance(orientation_spec, str):
+                    orientation_sampler = DistributionSampler.from_signature(
+                        orientation_spec, rng
+                    )
+            else:
+                # Default to uniform orientation in [0, 2*pi)
+                orientation_sampler = DistributionSampler.from_signature(
+                    f"uniform(0.0, {2.0 * PI})", rng=rng
+                )
+
+        pos_sampler = PositionSampler2D(
+            xc_sampler=DistributionSampler.from_signature(
+                f"uniform({x_min}, {x_max - x_min})", rng=rng
+            ),
+            yc_sampler=DistributionSampler.from_signature(
+                f"uniform({y_min}, {y_max - y_min})", rng=rng
+            ),
+            orientation_sampler=orientation_sampler,
+        )
+
+        size_params_specs = _normalize_shape_size_params(
+            shape_name, raw_params
+        )
+
         size_samplers = {}
-        for p_name, p_spec in a_shape_cfg.params.items():
+        for p_name, p_spec in size_params_specs.items():
             if isinstance(p_spec, (int, float)):
-                size_samplers[p_name] = p_spec
+                size_samplers[p_name] = float(p_spec)
             elif isinstance(p_spec, DistributionSpec):
                 size_samplers[p_name] = DistributionSampler(p_spec, rng)
             elif isinstance(p_spec, str):
@@ -385,7 +506,7 @@ def initialise_shapes_2d(
                 )
 
         incl_sampler = Inclusion2DSampler(
-            shape=a_shape_cfg.name,
+            shape=shape_name,
             pos_sampler=pos_sampler,
             size_samplers=size_samplers,
         )
@@ -418,7 +539,7 @@ class Cell:
         return self._shapes
 
     def clone(self) -> Self:
-        return self.__class__(self._domain, self._shapes)
+        return self.__class__(self._domain, self._shapes.clone())
 
     @classmethod
     def from_dict(cls, d: dict) -> Self:

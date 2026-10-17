@@ -73,8 +73,7 @@ def _generate_cell_2d_core(
 
         # Updating the shapes with the optimal positions
         positions = overlap_problem._as_matrix(solution.x_optimal)
-        for idx, a_shape in enumerate(shapes):
-            a_shape.position = Shape2DPose(*positions[idx])
+        cell.shapes.set_positions(positions)
 
         cell.plot(f_path=SCRATCH_DIR.joinpath(f"final_{index}.png"))
         # cell.save(
