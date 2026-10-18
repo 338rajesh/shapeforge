@@ -151,6 +151,15 @@ def _generate_cell_2d_core(
 
         # Updating the shapes with the optimal positions
         positions = overlap_problem._as_matrix(solution.x_optimal)
+        if cfg.packing.periodicity:
+            x_min, x_max = cell.domain.x_bounds
+            y_min, y_max = cell.domain.y_bounds
+            Lx = x_max - x_min
+            Ly = y_max - y_min
+            positions[:, 0] = x_min + np.mod(positions[:, 0] - x_min, Lx)
+            positions[:, 1] = y_min + np.mod(positions[:, 1] - y_min, Ly)
+            positions[:, 2] = np.mod(positions[:, 2], 2.0 * np.pi)
+
         cell.shapes.set_positions(positions)
 
         if cfg.packing.periodicity:

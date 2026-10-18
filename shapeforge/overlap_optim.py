@@ -210,11 +210,14 @@ class CellShapes2DOverlap(ShapesOverlap):
                 k = k[diff_shape]
                 l = l[diff_shape]
 
-                dx = cx[k] - cx[l]
-                dy = cy[k] - cy[l]
                 if self.periodicity:
+                    dx = cx_tree[k] - cx_tree[l]
+                    dy = cy_tree[k] - cy_tree[l]
                     dx = dx - self._Lx * np.round(dx / self._Lx)
                     dy = dy - self._Ly * np.round(dy / self._Ly)
+                else:
+                    dx = cx[k] - cx[l]
+                    dy = cy[k] - cy[l]
 
                 d = np.hypot(dx, dy)
                 c = (
@@ -271,42 +274,43 @@ class CellShapes2DOverlap(ShapesOverlap):
         return self._evaluate(x)[1]
 
     def projection(self, x: np.ndarray) -> np.ndarray:
-        positions = self._as_matrix(x)  # -> (N, 3) shaped matrix
         if self.periodicity:
-            two_pi = 2.0 * PI
-            positions[:, 0] = self._xmin + np.mod(positions[:, 0] - self._xmin, self._Lx)
-            positions[:, 1] = self._ymin + np.mod(positions[:, 1] - self._ymin, self._Ly)
-            positions[:, 2] = np.mod(positions[:, 2], two_pi)
-        else:
-            bounds = self.domain.bounds.to_dict()
-            xlb, xub = bounds["x_min"], bounds["x_max"]
-            ylb, yub = bounds["y_min"], bounds["y_max"]
+            # On a torus manifold, all points are feasible (no physical boundary walls).
+            # Identity projection avoids artificial coordinate jumps and spurious
+            # repulsion/ascent directions in line search across periodic boundaries.
+            self._eval_count["proj"] += 1
+            return x.copy()
 
-            olb, oub = 0.0, 2.0 * PI
+        positions = self._as_matrix(x)  # -> (N, 3) shaped matrix
+        bounds = self.domain.bounds.to_dict()
+        xlb, xub = bounds["x_min"], bounds["x_max"]
+        ylb, yub = bounds["y_min"], bounds["y_max"]
 
-            for i in range(self.num_inclusions):
-                buf_len = min(
-                    self.proj_buffer_ratio * self._radii[i] * float(self.rng.random()),
-                    0.5 * (xub - xlb),
-                )
-                if positions[i, 0] > xub:
-                    positions[i, 0] = xub - buf_len
-                elif positions[i, 0] < xlb:
-                    positions[i, 0] = xlb + buf_len
+        olb, oub = 0.0, 2.0 * PI
 
-                buf_len = min(
-                    self.proj_buffer_ratio * self._radii[i] * float(self.rng.random()),
-                    0.5 * (yub - ylb),
-                )
-                if positions[i, 1] > yub:
-                    positions[i, 1] = yub - buf_len
-                elif positions[i, 1] < ylb:
-                    positions[i, 1] = ylb + buf_len
+        for i in range(self.num_inclusions):
+            buf_len = min(
+                self.proj_buffer_ratio * self._radii[i] * float(self.rng.random()),
+                0.5 * (xub - xlb),
+            )
+            if positions[i, 0] > xub:
+                positions[i, 0] = xub - buf_len
+            elif positions[i, 0] < xlb:
+                positions[i, 0] = xlb + buf_len
 
-                if positions[i, 2] > oub:
-                    positions[i, 2] = oub
-                elif positions[i, 2] < olb:
-                    positions[i, 2] = olb
+            buf_len = min(
+                self.proj_buffer_ratio * self._radii[i] * float(self.rng.random()),
+                0.5 * (yub - ylb),
+            )
+            if positions[i, 1] > yub:
+                positions[i, 1] = yub - buf_len
+            elif positions[i, 1] < ylb:
+                positions[i, 1] = ylb + buf_len
+
+            if positions[i, 2] > oub:
+                positions[i, 2] = oub
+            elif positions[i, 2] < olb:
+                positions[i, 2] = olb
 
         self._eval_count["proj"] += 1
         return self._as_flat(positions)

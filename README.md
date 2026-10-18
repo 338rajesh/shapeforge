@@ -9,6 +9,14 @@ A high-performance Python package for generating 2D and 3D Representative Volume
 
 ---
 
+Sample generated cells with $65\%$ of area fraction occupied by shapes. 
+| Initial Random Cell | Optimized Non-Overlapping Cell |
+| :-----------------: | :----------------------------: |
+| ![Example initial output](docs/_static/sample_cells/initial_0.png) | ![Example final output](docs/_static/sample_cells/final_0.png) |
+| ![Example initial output](docs/_static/sample_cells/initial_1.png) | ![Example final output](docs/_static/sample_cells/final_1.png) |
+
+---
+
 ## Installation
 
 ```bash
@@ -69,12 +77,6 @@ final_cell.plot(
     "output/cell_0.png", size=(512, 512), background=0, foreground=255, dpi=100
 )
 ```
-
-| Initial Random Cell | Optimized Non-Overlapping Cell |
-| :-----------------: | :----------------------------: |
-| ![Example initial output](docs/_static/cell_2d_0_init.png) | ![Example final output](docs/_static/cell_2d_1.png) |
-| ![Example initial output](docs/_static/cell_2d_1_init.png) | ![Example final output](docs/_static/cell_2d_1.png) |
-
 
 ---
 
