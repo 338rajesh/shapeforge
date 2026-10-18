@@ -36,7 +36,7 @@ Installation
 
 Requirements
 ------------
-* Python >= 3.12
+* Python >= 3.14
 * NumPy >= 2.0
 * SciPy >= 1.12
 * Matplotlib >= 3.8
