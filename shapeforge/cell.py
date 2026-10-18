@@ -13,6 +13,8 @@ import yaml
 from scipy import stats
 
 from .config import ShapeConfig
+from .plotter import CellPlotter
+from .registry import ShapeRegistry
 from .utils import (
     PI,
     DistributionSampler,
@@ -50,12 +52,16 @@ def _shape_to_dict(shape: gb.Shape2D) -> dict:
 def _shape_from_dict(d: dict) -> gb.Shape2D:
     shape_name = d.get("shape", "").lower()
     is_periodic = d.get("is_periodic_copy", False)
-    if shape_name == "circle" or ("radius" in d and "semi_major_length" not in d):
+    if shape_name == "circle" or (
+        not shape_name and "radius" in d and "semi_major_length" not in d
+    ):
         s = gb.Circle(
             radius=float(d["radius"]),
             centre=[float(c) for c in d.get("centre", (0.0, 0.0))],
         )
-    elif shape_name == "ellipse":
+    elif shape_name == "ellipse" or (
+        not shape_name and "semi_major_length" in d
+    ):
         major_axis_angle = d.get("major_axis_angle", 0.0)
         if isinstance(major_axis_angle, (list, tuple)):
             major_axis_angle = gb.Angle(
@@ -70,8 +76,9 @@ def _shape_from_dict(d: dict) -> gb.Shape2D:
             major_axis_angle=major_axis_angle,
         )
     else:
-        cls = gb.shapes.SHAPES_2D_MAPPING.get(shape_name)
-        if cls is None:
+        if ShapeRegistry.has(shape_name):
+            cls = ShapeRegistry.get(shape_name)
+        else:
             raise ValueError(f"Unknown shape type '{shape_name}'")
         d_copy = {k: v for k, v in d.items() if k not in ("shape", "is_periodic_copy")}
         s = cls.from_dict(d_copy)
@@ -217,9 +224,9 @@ def shape_intersects_bounds(
 
 
 def generate_periodic_copies(
-    inclusions: "Inclusions2D",
+    inclusions: Inclusions2D,
     domain: CellDomain2D,
-) -> "Inclusions2D":
+) -> Inclusions2D:
     """Generate periodic copies of inclusions that cross domain boundaries.
 
     For each inclusion crossing any of the domain's boundaries (edges or corners),
@@ -544,7 +551,7 @@ class Inclusion2DSampler:
     ):
         if isinstance(shape, str):
             shape_str = Validator.as_string(shape).lower()
-            gb_shape = gb.shapes.SHAPES_2D_MAPPING[shape_str]
+            gb_shape = ShapeRegistry.get(shape_str)
         elif isinstance(shape, type) and issubclass(shape, gb.Shape2D):
             gb_shape = shape
         else:
@@ -696,7 +703,7 @@ def initialise_shapes_2d(
             )
 
         shape_name = Validator.as_string(a_shape_cfg.name).lower()
-        gb_shape_cls = gb.shapes.SHAPES_2D_MAPPING[shape_name]
+        gb_shape_cls = ShapeRegistry.get(shape_name)
         is_circular = issubclass(gb_shape_cls, gb.Circle)
 
         # Separate orientation parameters from size parameters
@@ -922,7 +929,7 @@ class Cell:
 
     def plot(self, f_path: str | Path | None = None, **kwargs) -> np.ndarray:
         """Plots the cell, optionally saves the plot to specified file, and returns the rendered image array."""
-        sp = gb.ShapesPlotter(**kwargs)
+        sp = CellPlotter(**kwargs)
         return sp.plot(
             shapes=[i for i in self.shapes],
             bounds=self.domain.domain,

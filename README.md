@@ -164,6 +164,74 @@ export:
 
 ---
 
+## User-Defined Custom Shapes
+
+ShapeForge supports user-defined shapes beyond the built-in `Circle` and `Ellipse` from `gbox`. Users can implement custom 2D particles by subclassing `gbox.Shape2D` in a standalone Python file.
+
+### 1. Defining a Custom Shape
+
+A custom shape needs:
+- `from_params(position_params, size_params)`: Factory method for spatial sampling.
+- `union_of_circles() -> gb.CirclesArray`: Multi-circle decomposition used by the SPG overlap optimizer.
+- `bounding_box`: Rectangular bounds for broadphase culling & periodic boundary copying.
+- `area` and `clone()`: Area calculation and deep copy.
+- **Plotting**: Either `to_patch()` returning a Matplotlib `Patch` (e.g. `Rectangle`, `PathPatch`) or `boundary_points()` returning an $(N, 2)$ array of boundary coordinates (rendered cleanly as a closed `Polygon`).
+
+```python
+import numpy as np
+import gbox as gb
+from shapeforge import register_shape
+
+@register_shape("stadium")
+class Stadium(gb.Shape2D):
+    def __init__(self, length: float, radius: float, centre=(0.0, 0.0), orientation=None):
+        self._length = float(length)
+        self._radius = float(radius)
+        self._position = gb.shapes_2d.Shape2DPose(centre[0], centre[1], orientation or gb.Angle.rad(0.0))
+
+    @property
+    def area(self) -> float:
+        return 2.0 * self._length * self._radius + np.pi * self._radius**2
+
+    def union_of_circles(self) -> gb.CirclesArray:
+        xs = np.linspace(-self._length / 2.0, self._length / 2.0, max(3, int(np.ceil(self._length / self._radius))))
+        return gb.CirclesArray(np.column_stack([xs, np.zeros_like(xs)]), np.full_like(xs, self._radius))
+
+    def boundary_points(self) -> np.ndarray:
+        # Return (N, 2) world-space boundary coordinates for crisp vector rendering
+        ...
+
+    @classmethod
+    def from_params(cls, position_params, size_params):
+        return cls(size_params["length"], size_params["radius"],
+                   centre=(position_params["xc"], position_params["yc"]),
+                   orientation=position_params.get("major_axis_angle"))
+```
+
+### 2. Specifying in `config.yaml` or CLI
+
+Include the script in your configuration file:
+
+```yaml
+custom_shapes:
+  - "shapes/my_custom_shapes.py"
+
+shapes:
+  - name: stadium
+    volume_fraction: 0.15
+    params:
+      length: 3.0
+      radius: 0.8
+```
+
+Or pass via the CLI flag:
+
+```bash
+shapeforge config.yaml --custom-shapes shapes/my_custom_shapes.py
+```
+
+---
+
 ## Architecture
 
 A **Cell** consists of:
