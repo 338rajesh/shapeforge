@@ -91,8 +91,9 @@ def nmspg(
     iter_max=1000,
     iter_memory=10,
     epsilon=1e-6,
-    spectral_step_min=1e-30,
-    spectral_step_max=1e30,
+    f_tol: float | None = None,
+    spectral_step_min=1e-10,
+    spectral_step_max=1e3,
     gamma=0.0001,
     sigma1=0.1,
     sigma2=0.9,
@@ -116,10 +117,15 @@ def nmspg(
         Number of previous function values to store for
         non-monotone line search.
     epsilon : float, optional, defaults to 1e-6
-        Convergence tolerance for the optimization.
+        Convergence tolerance for the projected gradient norm.
+    f_tol : float, optional, defaults to None
+        Target objective function value tolerance. When specified, the
+        optimization terminates successfully as soon as f <= f_tol. If the
+        algorithm reaches a stationary point (d_inf_norm <= epsilon) with
+        f > f_tol, it reports failure (stagnation in a local minimum).
     spectral_step_min : float, optional, defaults to 1e-10
         Lower bound of Barzilai-Borwein spectral step length.
-    spectral_step_max : float, optional, defaults to 1e10
+    spectral_step_max : float, optional, defaults to 1e3
         Upper bound of Barzilai-Borwein spectral step length.
     gamma : float, optional, defaults to 0.0001
         A sufficent decrease parameter for checking the
@@ -145,18 +151,18 @@ def nmspg(
         objective._eval_count["proj"] += 1
         return d_
 
-    def d_inf_norm(x_: np.ndarray, g_: np.ndarray, ssl_: float = 1.0) -> bool:
+    def d_inf_norm(x_: np.ndarray, g_: np.ndarray, ssl_: float = 1.0) -> float:
         """
         Check if the termination condition is met.
         """
-        return np.linalg.norm(get_d_k(x_, g_, ssl_), ord=np.inf)
+        return float(np.linalg.norm(get_d_k(x_, g_, ssl_), ord=np.inf))
 
     def get_init_ssl(x_: np.ndarray, g_: np.ndarray) -> float:
         """
         Compute the spectral step length using the Barzilai-Borwein method.
         """
         d_inf_norm_ = d_inf_norm(x_, g_, ssl_=1.0)
-        ssl_ = 1 / d_inf_norm_ if d_inf_norm_ > 0 else spectral_step_max
+        ssl_ = 1 / d_inf_norm_ if d_inf_norm_ > 0 else 1.0
         return max(spectral_step_min, min(spectral_step_max, ssl_))
 
     def get_ssl(
@@ -178,7 +184,7 @@ def nmspg(
     f_k = objective.func(x_k)
     g_k = objective.grad(x_k)
     f_history = [f_k]
-    g_norm_history = [np.linalg.norm(g_k, ord=np.inf)]
+    g_norm_history = [float(np.linalg.norm(g_k, ord=np.inf))]
 
     f_memory = deque([f_k] * iter_memory)  # Store function values
 
@@ -191,9 +197,21 @@ def nmspg(
         #       Check convergence
         # --------------------------------------------
         d_inf_norm_k = d_inf_norm(x_k, g_k, ssl_=1.0)
-        if d_inf_norm_k <= epsilon:
+        if f_tol is not None and f_k <= f_tol:
             status = "success"
             break
+
+        if d_inf_norm_k <= epsilon:
+            if f_tol is not None and f_k > f_tol:
+                status = "failure"
+                failure_message = (
+                    f"Optimisation reached a stationary point (d_inf_norm = {d_inf_norm_k:.4g} <= {epsilon}), "
+                    f"but residual objective value f = {f_k:.4g} exceeds f_tol ({f_tol})."
+                )
+            else:
+                status = "success"
+            break
+
 
         if p_bar:
             print(
@@ -217,16 +235,15 @@ def nmspg(
         alpha = 1.0  # Initial step length
         ls_iter = 0
         slope_local = np.dot(g_k, d_k)
-        while True:
+        armijo_satisfied = False
+
+        while ls_iter < ls_iter_max:
             x_trial = x_k + alpha * d_k
             f_trial = objective.func(x_trial)
 
-            # terminate if reached the max number of line search iterations
-            if ls_iter >= ls_iter_max:
-                break
-
             # terminate if the Armijo condition is satisfied
             if f_trial <= f_max + (gamma * alpha * slope_local):
+                armijo_satisfied = True
                 break
 
             # update the step length with safeguard parameters
@@ -242,6 +259,30 @@ def nmspg(
                 alpha = alpha / 2
 
             ls_iter += 1
+
+        if not armijo_satisfied:
+            # Fallback: try standard projected gradient step with safe step length
+            d_fallback = get_d_k(
+                x_k, g_k, ssl_=min(1.0, 1.0 / max(d_inf_norm_k, 1e-12))
+            )
+            slope_fallback = np.dot(g_k, d_fallback)
+            alpha_fb = 1.0
+            ls_iter_fb = 0
+            while ls_iter_fb < ls_iter_max:
+                x_trial = x_k + alpha_fb * d_fallback
+                f_trial = objective.func(x_trial)
+                if f_trial <= f_max + (gamma * alpha_fb * slope_fallback):
+                    armijo_satisfied = True
+                    break
+                alpha_fb = alpha_fb / 2
+                ls_iter_fb += 1
+
+        if not armijo_satisfied:
+            status = "failure"
+            failure_message = (
+                f"Line search failed to find an acceptable step at iteration {k + 1}."
+            )
+            break
 
         # --------------------------------------------
         #       Update the point, x_k
@@ -263,7 +304,7 @@ def nmspg(
         ssl_k = ssl_kp1
 
         f_history.append(f_k)
-        g_norm_history.append(np.linalg.norm(g_k, ord=np.inf))
+        g_norm_history.append(float(np.linalg.norm(g_k, ord=np.inf)))
         f_memory.popleft()
         f_memory.append(f_k)
 
@@ -273,6 +314,7 @@ def nmspg(
         failure_message = (
             "Maximum number of iterations reached without convergence."
         )
+
 
     return OptimisationResult(
         x_optimal=np.asarray(x_k),

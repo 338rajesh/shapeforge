@@ -31,8 +31,9 @@ def _generate_cell_2d_core(
         "iter_max": 1000,
         "iter_memory": 10,
         "epsilon": 1e-6,
-        "spectral_step_min": 1e-30,
-        "spectral_step_max": 1e30,
+        "f_tol": 1e-6,
+        "spectral_step_min": 1e-10,
+        "spectral_step_max": 1e3,
         "gamma": 0.0001,
         "sigma1": 0.1,
         "sigma2": 0.9,
@@ -143,11 +144,15 @@ def _generate_cell_2d_core(
         solution = overlap_problem.solve(**solver_options)
 
         print()
+        final_f = solution.f_history[-1] if solution.f_history else float("nan")
         logger.info(
             f"[status: {solution.status}]"
+            f"[f: {final_f:.4e}]"
             f"[iter count: {solution.iter_count}]"
             f"[Time: {(time.perf_counter() - t0):4.3f}sec]"
         )
+        if solution.status == "failure" and solution.failure_message:
+            logger.warning(f"  {solution.failure_message}")
 
         # Updating the shapes with the optimal positions
         positions = overlap_problem._as_matrix(solution.x_optimal)

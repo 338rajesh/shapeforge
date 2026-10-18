@@ -119,5 +119,51 @@ def test_nmspg_rosenbrock():
     print(f"Final function value: {result.f_history[-1]}")
 
 
-# if __name__ == "__main__":
-#     test_nmspg_quadratic_basic()
+def test_nmspg_f_tol_early_success():
+    dim = 10
+    A = np.eye(dim)
+    b = np.zeros(dim)
+    lower = -5.0 * np.ones(dim)
+    upper = 5.0 * np.ones(dim)
+    problem = QuadraticProblem(A=A, b=b, lower=lower, upper=upper)
+    x0 = 2.0 * np.ones(dim)
+
+    # With f_tol=1.0, should terminate early once f(x) <= 1.0 even if gradient is still large
+    result = nmspg(
+        objective=problem,
+        x0=x0,
+        iter_max=500,
+        epsilon=1e-12,
+        f_tol=1.0,
+    )
+    assert result.status == "success"
+    assert result.f_history[-1] <= 1.0
+
+
+def test_nmspg_f_tol_stagnation_failure():
+    # Construct a problem with local minimum / stationary point at f > f_tol
+    # Quadratic with f(x) = 0.5 * x^2 + 5.0 (min f is 5.0 at x=0)
+    class OffsetQuadratic(OptimisationProblem):
+        def f(self, x):
+            return float(0.5 * np.sum(x**2) + 5.0)
+
+        def grad_f(self, x):
+            return x.copy()
+
+        def projection(self, x):
+            return x.copy()
+
+    problem = OffsetQuadratic()
+    x0 = np.array([0.01, 0.01])
+
+    # If f_tol=1.0, the minimum is 5.0 > f_tol. The gradient will vanish (d_inf <= 1e-6)
+    # but f will remain ~5.0. It should report failure!
+    result = nmspg(
+        objective=problem,
+        x0=x0,
+        iter_max=500,
+        epsilon=1e-5,
+        f_tol=1.0,
+    )
+    assert result.status == "failure"
+    assert "exceeds f_tol" in result.failure_message

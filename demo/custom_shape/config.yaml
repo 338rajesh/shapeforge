@@ -1,0 +1,92 @@
+# ============================================================================
+# ShapeForge Configuration File
+# Standard Unit System: Metric (e.g., mm for lengths) or Dimensionless
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Metadata & Execution
+# ----------------------------------------------------------------------------
+num_cells: 2
+metadata:
+  title: shapeforge-demo
+  rng_seed: 5
+  log_level: info
+
+# ----------------------------------------------------------------------------
+# Spatial Domain Definition
+# ----------------------------------------------------------------------------
+domain:
+  shape: rectangle
+  bounds:
+    x_min: 0.0
+    y_min: 0.0
+    x_max: 30.0
+    y_max: 30.0
+
+# ----------------------------------------------------------------------------
+# Inclusion Phase Geometry
+# ----------------------------------------------------------------------------
+custom_shapes:
+  - "cshape.py"
+
+shapes:
+  - name: Circle
+    volume_fraction: 0.20
+    params:
+      # params might be constant or might follow a distribution. Constant
+      # values can be passed as float values, while the params with a
+      # distribution must be defined with "distr_name(loc, scale)" signature
+      radius: 1.0 # uniform(1, 0.0)
+  - name: Ellipse
+    volume_fraction: 0.15
+    params:
+      # params might be constant or might follow a distribution. Constant
+      # values can be passed as float values, while the params with a
+      # distribution must be defined with "distr_name(loc, scale)" signature
+      semi_major_length: 2.0
+      semi_minor_length: 1.0
+      major_axis_angle: uniform(0.0, 3.0)
+
+  - name: CShape
+    volume_fraction: 0.15
+    params:
+      # params might be constant or might follow a distribution. Constant
+      # values can be passed as float values, while the params with a
+      # distribution must be defined with "distr_name(loc, scale)" signature
+      r_small: 0.4
+      r_curve: 1.0
+      c_theta: uniform(1.0, 2.0)
+
+# ----------------------------------------------------------------------------
+# Packing
+# ----------------------------------------------------------------------------
+packing:
+  periodicity: true
+  min_gap_ratio: 0.1
+  proj_buffer_ratio: 1.0
+  adjust_bounds_to_exact_vf: false
+
+# ----------------------------------------------------------------------------
+# Solver & Optimization Engine Configuration
+# ----------------------------------------------------------------------------
+solver:
+  init_method: sobol # uniform | lhs | sobol
+  optimiser:
+    name: nmspg
+    iter_max: 1000
+    iter_memory: 20
+    epsilon: 1.0e-6
+
+# ----------------------------------------------------------------------------
+# Export & Visualization Outputs
+# ----------------------------------------------------------------------------
+export:
+  output_dir: ./scratch/outputs/test_2
+  as_array: false
+  formats: # png, jpg, pdf, json, pkl, yml, npz
+    - png
+    - json
+  background: 0
+  facecolor: 255
+  image_dimensions: [512, 512]
+  dpi: 100
