@@ -1,3 +1,12 @@
+"""
+Microstructure cell plotting and Matplotlib rendering engine.
+=============================================================
+
+Extends ``gbox.ShapesPlotter`` to support both native geometric shapes
+(:class:`gbox.Circle`, :class:`gbox.Ellipse`, :class:`gbox.CirclesArray`) and
+user-defined custom subclasses of :class:`gbox.Shape2D`.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -10,7 +19,22 @@ from matplotlib.patches import Polygon as MplPolygon
 
 
 def _to_rgb(color: Any) -> tuple[int, int, int]:
-    """Convert color specification (name, hex, or tuple) to (R, G, B) in 0-255."""
+    """
+    Convert a flexible color specification into an integer (R, G, B) tuple.
+
+    Supports named colors (e.g. ``'white'``, ``'red'``), hex codes (e.g. ``'#ffffff'``),
+    integer grayscale values in [0, 255], or 3-element float/int tuples.
+
+    Parameters
+    ----------
+    color : Any
+        Color specification in string, integer, or tuple format.
+
+    Returns
+    -------
+    tuple of int
+        3-tuple ``(R, G, B)`` with values in $[0, 255]$.
+    """
     try:
         from gbox.plots.render import _to_rgb as gbox_to_rgb
 
@@ -23,23 +47,55 @@ def _to_rgb(color: Any) -> tuple[int, int, int]:
 
 
 class CellPlotter(gb.ShapesPlotter):
-    """Plotter supporting both native gbox shapes and user-defined custom shapes.
+    """
+    Plotter supporting both native gbox shapes and user-defined custom shapes.
 
-    For custom shapes, visual rendering adheres to:
-    1. If the shape defines ``to_patch()`` or ``as_patch()``, it uses the returned
-       Matplotlib ``Patch`` (or collection of patches) directly.
-    2. Otherwise, if the shape defines ``boundary_points()`` or ``get_boundary_points()``,
-       it renders the boundary as a closed ``matplotlib.patches.Polygon``.
-    3. If the shape defines ``body_boundary_points()`` or ``local_boundary_points()``,
-       it transforms the body-frame coordinates using the shape's position pose into world
-       coordinates and renders as a closed ``Polygon``.
-    4. If neither is defined, a descriptive ``TypeError`` is raised.
+    Renders collections of 2D geometric inclusions into Matplotlib figures
+    or directly into rasterized NumPy image arrays.
+
+    For custom shapes (subclasses of :class:`gbox.Shape2D`), rendering priority is:
+    1. If the shape defines :meth:`to_patch` or :meth:`as_patch`, it uses the returned
+       Matplotlib :class:`matplotlib.patches.Patch` (or sequence of patches) directly.
+    2. If the shape defines :meth:`boundary_points` or :meth:`get_boundary_points`,
+       it renders the boundary coordinates as a closed :class:`matplotlib.patches.Polygon`.
+    3. If the shape defines :meth:`body_boundary_points` or :meth:`local_boundary_points`,
+       it transforms the body-frame coordinates using the shape's pose into world
+       coordinates and renders as a closed polygon.
+    4. If none of these are defined, a descriptive :exc:`TypeError` is raised.
+
+    Parameters
+    ----------
+    **kwargs : Any
+        Keyword arguments forwarded to ``gbox.ShapesPlotter`` (e.g. ``size``,
+        ``background``, ``foreground``, ``dpi``).
+
+    Examples
+    --------
+    >>> import gbox as gb
+    >>> from shapeforge.plotter import CellPlotter
+    >>> plotter = CellPlotter(background='black', foreground='white', size=(256, 256))
+    >>> circles = [gb.Circle(1.0, centre=[2, 2]), gb.Circle(1.0, centre=[5, 5])]
+    >>> arr = plotter.plot(circles, bounds=gb.Bounds2DRectangular(0, 0, 10, 10))
+    >>> arr.shape
+    (256, 256, 3)
     """
 
     def _normalize(
         self, shapes: Any
     ) -> list[tuple[Any, tuple[int, int, int]]]:
-        """Convert the user's input into a list of (shape, rgb_color) pairs."""
+        """
+        Normalize input shapes into a sequence of ``(shape, rgb_color)`` tuples.
+
+        Parameters
+        ----------
+        shapes : Any
+            Single shape, list of shapes, or list of ``(shape, color)`` tuples.
+
+        Returns
+        -------
+        list of tuple
+            List of ``(shape_instance, (r, g, b))`` pairs.
+        """
         if not isinstance(shapes, Sequence) or isinstance(
             shapes, (str, bytes, np.ndarray)
         ):
@@ -54,6 +110,25 @@ class CellPlotter(gb.ShapesPlotter):
         return items
 
     def _to_patches(self, shape: Any) -> list[Patch]:
+        """
+        Convert a shape instance into a list of Matplotlib Patch objects.
+
+        Parameters
+        ----------
+        shape : gb.Shape2D
+            Shape instance to convert.
+
+        Returns
+        -------
+        list of Patch
+            One or more Matplotlib patch objects representing the shape geometry.
+
+        Raises
+        ------
+        TypeError
+            If the shape cannot be converted to patches via built-in handlers,
+            ``to_patch()``, or ``boundary_points()``.
+        """
         # Built-in native gbox shapes
         if isinstance(shape, (gb.Circle, gb.Ellipse, gb.CirclesArray)):
             return super()._to_patches(shape)
