@@ -195,6 +195,7 @@ def _generate_cell_2d_core(
 def generate_cell_2d(
     config: dict[str, Any] | str | Path,
     *,
+    custom_shapes: Sequence[str | Path] | None = None,
     log_level: str | None = None,
     profile: bool = False,
     profile_output: str | Path | None = None,
@@ -208,6 +209,8 @@ def generate_cell_2d(
     ----------
     config : dict | str | Path
         Configuration mapping or path to YAML/JSON configuration file.
+    custom_shapes : Sequence[str | Path] | None, optional
+        Additional paths to Python files defining custom shapes to register.
     log_level : str | None, optional
         Logging level override (e.g. 'DEBUG', 'INFO'). If None, uses metadata.log_level from config.
     profile : bool, optional
@@ -221,8 +224,23 @@ def generate_cell_2d(
         Sort criterion for profiling stats: 'cumulative', 'time', or 'calls'
         (default: 'cumulative').
     """
+    base_dir = (
+        Path(config).parent.resolve()
+        if isinstance(config, (str, Path))
+        else None
+    )
+
+    if custom_shapes:
+        from .registry import ShapeRegistry
+
+        for cs in custom_shapes:
+            cs_path = Path(cs)
+            if not cs_path.is_absolute() and base_dir is not None:
+                cs_path = (base_dir / cs_path).resolve()
+            ShapeRegistry.load_file(cs_path)
+
     config_dict = _load_dict(config)
-    cfg = ShapeForgeConfig.from_dict(config_dict)
+    cfg = ShapeForgeConfig.from_dict(config_dict, base_dir=base_dir)
 
     effective_log_level = (log_level or cfg.metadata.log_level).upper()
     logging.getLogger("shapeforge").setLevel(effective_log_level)
@@ -289,6 +307,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="cumulative",
         help="Sort metric for the profiling summary (default: cumulative).",
     )
+    parser.add_argument(
+        "--custom-shapes",
+        nargs="*",
+        default=None,
+        help="Optional paths to Python files defining custom shapes to register.",
+    )
     return parser
 
 
@@ -297,6 +321,7 @@ def main():
     args = parser.parse_args()
     generate_cell_2d(
         args.config_file,
+        custom_shapes=args.custom_shapes,
         log_level=args.log,
         profile=args.profile,
         profile_output=args.profile_output,

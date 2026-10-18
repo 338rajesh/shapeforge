@@ -6,8 +6,8 @@ from numbers import Number
 from pathlib import Path
 
 from gbox.core.utils import Bounds2DRectangular, Validator
-from gbox.shapes import SHAPES_2D_MAPPING as GBOX_2D_SHAPES_MAPPING
 
+from .registry import ShapeRegistry
 from .utils import DistributionSpec, _load_dict
 
 ALLOWABLE_EXPORT_FORMATS = {
@@ -105,7 +105,11 @@ class ShapeConfig:
         shape_name = Validator.as_string(
             data["name"], min_length=1, name="shape.name"
         ).lower()
-        Validator.has(shape_name, list(GBOX_2D_SHAPES_MAPPING.keys()))
+        if not ShapeRegistry.has(shape_name):
+            available = ShapeRegistry.available_shapes()
+            raise ValueError(
+                f"Unknown shape '{shape_name}'. Available shapes: {available}"
+            )
 
         volume_fraction = Validator.as_float(
             data["volume_fraction"],
@@ -319,11 +323,31 @@ class ShapeForgeConfig:
     packing: PackingConfig
     solver: SolverConfig
     export: ExportConfig
+    custom_shapes: tuple[str, ...] = ()
 
     @classmethod
-    def from_dict(cls, data: dict) -> ShapeForgeConfig:
-        data = Validator.as_dict(
-            data,
+    def from_dict(
+        cls, data: dict, base_dir: Path | None = None
+    ) -> ShapeForgeConfig:
+        data_copy = dict(data)
+        custom_shapes_raw = data_copy.pop("custom_shapes", None)
+        custom_shapes_list: list[str] = []
+        if custom_shapes_raw is not None:
+            raw_seq = Validator.as_sequence(
+                custom_shapes_raw, name="custom_shapes"
+            )
+            for item in raw_seq:
+                p_str = Validator.as_string(
+                    item, min_length=1, name="custom_shapes item"
+                )
+                custom_shapes_list.append(p_str)
+                p_obj = Path(p_str)
+                if not p_obj.is_absolute() and base_dir is not None:
+                    p_obj = (base_dir / p_obj).resolve()
+                ShapeRegistry.load_file(p_obj)
+
+        data_validated = Validator.as_dict(
+            data_copy,
             name="ShapeForge Config",
             key_type_map={
                 "num_cells": int,
@@ -337,14 +361,16 @@ class ShapeForgeConfig:
             reject_extra_keys=True,
         )
         num_cells = Validator.as_int(
-            data["num_cells"], low=1, name="Number of cells"
+            data_validated["num_cells"], low=1, name="Number of cells"
         )
-        metadata = MetadataConfig.from_dict(data["metadata"])
-        solver = SolverConfig.from_dict(data["solver"])
-        export = ExportConfig.from_dict(data["export"])
-        domain = DomainConfig.from_dict(data["domain"])
-        packing = PackingConfig.from_dict(data["packing"])
-        raw_shapes = Validator.as_sequence(data["shapes"], min_length=1)
+        metadata = MetadataConfig.from_dict(data_validated["metadata"])
+        solver = SolverConfig.from_dict(data_validated["solver"])
+        export = ExportConfig.from_dict(data_validated["export"])
+        domain = DomainConfig.from_dict(data_validated["domain"])
+        packing = PackingConfig.from_dict(data_validated["packing"])
+        raw_shapes = Validator.as_sequence(
+            data_validated["shapes"], min_length=1
+        )
         shapes = tuple(ShapeConfig.from_dict(shape) for shape in raw_shapes)
         total_volume_fraction = sum(shape.volume_fraction for shape in shapes)
         if total_volume_fraction > 1.0:
@@ -361,12 +387,18 @@ class ShapeForgeConfig:
             packing=packing,
             solver=solver,
             export=export,
+            custom_shapes=tuple(custom_shapes_list),
         )
 
     @classmethod
-    def from_(cls, source: dict | str | Path) -> ShapeForgeConfig:
+    def from_(
+        cls, source: dict | str | Path, base_dir: Path | None = None
+    ) -> ShapeForgeConfig:
         if isinstance(source, (str, Path)):
-            data = _load_dict(source)
+            source_path = Path(source).resolve()
+            data = _load_dict(source_path)
+            if base_dir is None:
+                base_dir = source_path.parent
         elif isinstance(source, dict):
             data = source
         else:
@@ -374,4 +406,4 @@ class ShapeForgeConfig:
                 f"Invalid type '{type(source).__name__}' of source."
                 "Expecting a str or pathlib.Path or dict"
             )
-        return cls.from_dict(data)
+        return cls.from_dict(data, base_dir=base_dir)
