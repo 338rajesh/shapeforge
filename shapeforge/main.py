@@ -19,11 +19,6 @@ logger = get_logger(__name__)
 def _generate_cell_2d_core(
     cfg: ShapeForgeConfig,
 ) -> Sequence[tuple[Cell, Cell]]:
-    if cfg.packing.periodicity:
-        raise NotImplementedError(
-            "Periodic packing is not yet supported in 2D cell generation."
-        )
-
     out_dir = Path(cfg.export.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -110,18 +105,22 @@ def _generate_cell_2d_core(
         logger.debug("  Cell object containing shapes and domain is created")
 
         initial_copy = cell.clone()
+        if cfg.packing.periodicity:
+            initial_export = initial_copy.make_periodic()
+        else:
+            initial_export = initial_copy
 
         # Render/export initial cell
         initial_arr = None
         for fmt in img_formats:
-            initial_arr = initial_copy.plot(
+            initial_arr = initial_export.plot(
                 f_path=out_dir / f"initial_{index}.{fmt}", **plot_kwargs
             )
         if initial_arr is None and cfg.export.as_array:
-            initial_arr = initial_copy.plot(f_path=None, **plot_kwargs)
+            initial_arr = initial_export.plot(f_path=None, **plot_kwargs)
 
         for fmt in data_formats:
-            initial_copy.save(
+            initial_export.save(
                 f_path=out_dir / f"initial_{index}.{fmt}", overwrite=True
             )
 
@@ -131,6 +130,7 @@ def _generate_cell_2d_core(
         overlap_problem = CellShapes2DOverlap(
             cell.domain,
             cell.shapes,
+            periodicity=cfg.packing.periodicity,
             buffer_thickness_ratio=cfg.packing.min_gap_ratio,
             proj_buffer_ratio=(
                 cfg.packing.proj_buffer_ratio
@@ -151,18 +151,32 @@ def _generate_cell_2d_core(
 
         # Updating the shapes with the optimal positions
         positions = overlap_problem._as_matrix(solution.x_optimal)
+        if cfg.packing.periodicity:
+            x_min, x_max = cell.domain.x_bounds
+            y_min, y_max = cell.domain.y_bounds
+            Lx = x_max - x_min
+            Ly = y_max - y_min
+            positions[:, 0] = x_min + np.mod(positions[:, 0] - x_min, Lx)
+            positions[:, 1] = y_min + np.mod(positions[:, 1] - y_min, Ly)
+            positions[:, 2] = np.mod(positions[:, 2], 2.0 * np.pi)
+
         cell.shapes.set_positions(positions)
+
+        if cfg.packing.periodicity:
+            final_cell = cell.make_periodic()
+        else:
+            final_cell = cell
 
         final_arr = None
         for fmt in img_formats:
-            final_arr = cell.plot(
+            final_arr = final_cell.plot(
                 f_path=out_dir / f"final_{index}.{fmt}", **plot_kwargs
             )
         if final_arr is None and cfg.export.as_array:
-            final_arr = cell.plot(f_path=None, **plot_kwargs)
+            final_arr = final_cell.plot(f_path=None, **plot_kwargs)
 
         for fmt in data_formats:
-            cell.save(f_path=out_dir / f"final_{index}.{fmt}", overwrite=True)
+            final_cell.save(f_path=out_dir / f"final_{index}.{fmt}", overwrite=True)
 
         if cfg.export.as_array:
             if initial_arr is not None:
@@ -174,7 +188,7 @@ def _generate_cell_2d_core(
             sol=solution,
             f_path=out_dir / f"fg_variation_{index}.png",
         )
-        cells[index] = (initial_copy, cell)
+        cells[index] = (initial_export, final_cell)
     return cells
 
 

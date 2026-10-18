@@ -13,12 +13,14 @@ class ShapesOverlap(OptimisationProblem):
         domain: CellDomain,
         shapes: Inclusions,
         *,
+        periodicity: bool = False,
         buffer_thickness_ratio: float = 0.05,
         proj_buffer_ratio: float = 2.0,
         rng: np.random.Generator | None = None,
     ):
         super().__init__()
         self.num_inclusions = len(shapes)
+        self.periodicity = periodicity
         self.x0 = shapes.get_positions(flat=True)
 
         self.shapes = shapes
@@ -36,19 +38,18 @@ class ShapesOverlap(OptimisationProblem):
 
 class CellShapes2DOverlap(ShapesOverlap):
     """
-    Overlap cost for a 2-D cell with circular inclusions, no periodicity.
+    Overlap cost for a 2-D cell with inclusions, supporting periodic boundaries.
 
     Parameters
     ----------
-    domain : CellDomain
-    shapes : dict[str, list[gb.GShape]]
-        Output of ``initialise_shapes``; all shapes must be circles.
-    ssd_ratio : float
-        Minimum surface-to-surface gap as a fraction of each circle's
-        radius.  Default 0.04 (4 %).
-    proj_buffer_ratio : float
-        Projection buffer thickness = proj_buffer_ratio x radius.
-        Default 2.0 (mirrors Julia default).
+    domain : CellDomain2D
+    shapes : Inclusions2D
+    periodicity : bool, optional
+        Whether to enforce periodic boundary conditions across domain edges (default: False).
+    buffer_thickness_ratio : float, optional
+        Minimum surface-to-surface gap as a fraction of each shape's equivalent radius.
+    proj_buffer_ratio : float, optional
+        Projection buffer thickness ratio (used in non-periodic projection).
     """
 
     def __init__(
@@ -56,6 +57,7 @@ class CellShapes2DOverlap(ShapesOverlap):
         domain: CellDomain2D,
         shapes: Inclusions2D,
         *,
+        periodicity: bool = False,
         buffer_thickness_ratio: float = 0.05,
         proj_buffer_ratio: float = 2.0,
         rng: np.random.Generator | None = None,
@@ -63,10 +65,27 @@ class CellShapes2DOverlap(ShapesOverlap):
         super().__init__(
             domain,
             shapes,
+            periodicity=periodicity,
             buffer_thickness_ratio=buffer_thickness_ratio,
             proj_buffer_ratio=proj_buffer_ratio,
             rng=rng,
         )
+        bounds_dict = domain.bounds.to_dict()
+        self._xmin = float(bounds_dict["x_min"])
+        self._xmax = float(bounds_dict["x_max"])
+        self._ymin = float(bounds_dict["y_min"])
+        self._ymax = float(bounds_dict["y_max"])
+        self._Lx = self._xmax - self._xmin
+        self._Ly = self._ymax - self._ymin
+        self._boxsize = (
+            np.array([self._Lx, self._Ly], dtype=float)
+            if periodicity
+            else None
+        )
+
+        if self.periodicity:
+            self.x0 = self.projection(self.x0)
+
         equivalent_circle_radii = shapes.get_equivalent_circle_radii()
         self._ssd = equivalent_circle_radii * buffer_thickness_ratio
         self._radii = equivalent_circle_radii
@@ -163,8 +182,17 @@ class CellShapes2DOverlap(ShapesOverlap):
             + c_th[self._shape_idx] * self._local_py
         )
 
-        pts = np.column_stack((cx, cy))
-        tree = cKDTree(pts)
+        if self.periodicity:
+            cx_tree = np.mod(cx - self._xmin, self._Lx)
+            cx_tree = np.clip(cx_tree, 0.0, np.nextafter(self._Lx, 0.0))
+            cy_tree = np.mod(cy - self._ymin, self._Ly)
+            cy_tree = np.clip(cy_tree, 0.0, np.nextafter(self._Ly, 0.0))
+            pts = np.column_stack((cx_tree, cy_tree))
+            tree = cKDTree(pts, boxsize=self._boxsize)
+        else:
+            pts = np.column_stack((cx, cy))
+            tree = cKDTree(pts)
+
         pairs = tree.query_pairs(r=self._max_reach, output_type="ndarray")
 
         cost = 0.0
@@ -182,8 +210,15 @@ class CellShapes2DOverlap(ShapesOverlap):
                 k = k[diff_shape]
                 l = l[diff_shape]
 
-                dx = cx[k] - cx[l]
-                dy = cy[k] - cy[l]
+                if self.periodicity:
+                    dx = cx_tree[k] - cx_tree[l]
+                    dy = cy_tree[k] - cy_tree[l]
+                    dx = dx - self._Lx * np.round(dx / self._Lx)
+                    dy = dy - self._Ly * np.round(dy / self._Ly)
+                else:
+                    dx = cx[k] - cx[l]
+                    dy = cy[k] - cy[l]
+
                 d = np.hypot(dx, dy)
                 c = (
                     self._circle_eff_radii[k] + self._circle_eff_radii[l]
@@ -239,6 +274,13 @@ class CellShapes2DOverlap(ShapesOverlap):
         return self._evaluate(x)[1]
 
     def projection(self, x: np.ndarray) -> np.ndarray:
+        if self.periodicity:
+            # On a torus manifold, all points are feasible (no physical boundary walls).
+            # Identity projection avoids artificial coordinate jumps and spurious
+            # repulsion/ascent directions in line search across periodic boundaries.
+            self._eval_count["proj"] += 1
+            return x.copy()
+
         positions = self._as_matrix(x)  # -> (N, 3) shaped matrix
         bounds = self.domain.bounds.to_dict()
         xlb, xub = bounds["x_min"], bounds["x_max"]

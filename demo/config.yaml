@@ -9,7 +9,7 @@
 num_cells: 2
 metadata:
   title: shapeforge-demo
-  rng_seed: 42
+  rng_seed: 5
   log_level: info
 
 # ----------------------------------------------------------------------------
@@ -20,22 +20,22 @@ domain:
   bounds:
     x_min: 0.0
     y_min: 0.0
-    x_max: 50.0
-    y_max: 50.0
+    x_max: 30.0
+    y_max: 30.0
 
 # ----------------------------------------------------------------------------
 # Inclusion Phase Geometry
 # ----------------------------------------------------------------------------
 shapes:
   - name: Circle
-    volume_fraction: 0.25
+    volume_fraction: 0.20
     params:
       # params might be constant or might follow a distribution. Constant
       # values can be passed as float values, while the params with a
       # distribution must be defined with "distr_name(loc, scale)" signature
       radius: 1.0 # uniform(1, 0.0)
   - name: Ellipse
-    volume_fraction: 0.20
+    volume_fraction: 0.45
     params:
       # params might be constant or might follow a distribution. Constant
       # values can be passed as float values, while the params with a
@@ -48,9 +48,9 @@ shapes:
 # Packing
 # ----------------------------------------------------------------------------
 packing:
-  periodicity: false
-  min_gap_ratio: 0.05
-  proj_buffer_ratio: 2.0
+  periodicity: true
+  min_gap_ratio: 0.1
+  proj_buffer_ratio: 1.0
   adjust_bounds_to_exact_vf: false
 
 # ----------------------------------------------------------------------------
@@ -72,6 +72,7 @@ export:
   formats: # png, jpg, pdf, json, pkl, yml, npz
     - png
     - json
+    - pdf
   background: 0
   facecolor: 255
   image_dimensions: [512, 512]

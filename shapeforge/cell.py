@@ -26,13 +26,13 @@ logger = get_logger(__name__)
 
 def _shape_to_dict(shape: gb.Shape2D) -> dict:
     if type(shape) is gb.Circle:
-        return {
+        d = {
             "shape": "circle",
             "radius": float(shape.radius),
             "centre": [float(c) for c in shape.centre],
         }
     elif isinstance(shape, gb.Ellipse):
-        return {
+        d = {
             "shape": "ellipse",
             "semi_major_length": float(shape.semi_major_length),
             "semi_minor_length": float(shape.semi_minor_length),
@@ -40,14 +40,18 @@ def _shape_to_dict(shape: gb.Shape2D) -> dict:
             "major_axis_angle": [float(shape.position.orientation.radians), "rad"],
         }
     else:
-        d = shape.to_dict()
-        return {"shape": shape.__class__.__name__.lower(), **d}
+        d_inner = shape.to_dict()
+        d = {"shape": shape.__class__.__name__.lower(), **d_inner}
+    if getattr(shape, "is_periodic_copy", False):
+        d["is_periodic_copy"] = True
+    return d
 
 
 def _shape_from_dict(d: dict) -> gb.Shape2D:
     shape_name = d.get("shape", "").lower()
+    is_periodic = d.get("is_periodic_copy", False)
     if shape_name == "circle" or ("radius" in d and "semi_major_length" not in d):
-        return gb.Circle(
+        s = gb.Circle(
             radius=float(d["radius"]),
             centre=[float(c) for c in d.get("centre", (0.0, 0.0))],
         )
@@ -59,7 +63,7 @@ def _shape_from_dict(d: dict) -> gb.Shape2D:
             )
         elif isinstance(major_axis_angle, (int, float)):
             major_axis_angle = gb.Angle.rad(float(major_axis_angle))
-        return gb.Ellipse(
+        s = gb.Ellipse(
             semi_major_length=float(d["semi_major_length"]),
             semi_minor_length=float(d["semi_minor_length"]),
             centre=[float(c) for c in d.get("centre", (0.0, 0.0))],
@@ -69,8 +73,11 @@ def _shape_from_dict(d: dict) -> gb.Shape2D:
         cls = gb.shapes.SHAPES_2D_MAPPING.get(shape_name)
         if cls is None:
             raise ValueError(f"Unknown shape type '{shape_name}'")
-        d_copy = {k: v for k, v in d.items() if k != "shape"}
-        return cls.from_dict(d_copy)
+        d_copy = {k: v for k, v in d.items() if k not in ("shape", "is_periodic_copy")}
+        s = cls.from_dict(d_copy)
+    if is_periodic:
+        s.is_periodic_copy = True
+    return s
 
 
 class CellDomain(ABC):
@@ -153,6 +160,120 @@ class CellDomain2D(CellDomain):
         return {"bounds": dict(self._bounds.bounds)}
 
 
+def circle_intersects_rect(
+    cx: float,
+    cy: float,
+    r: float,
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+) -> bool:
+    """Return True if a 2D circle intersects or touches a rectangle [xmin, xmax] x [ymin, ymax]."""
+    dx = max(xmin - cx, 0.0, cx - xmax)
+    dy = max(ymin - cy, 0.0, cy - ymax)
+    return (dx * dx + dy * dy) < (r * r)
+
+
+def get_shape_circles(shape: gb.Shape2D) -> list[tuple[float, float, float]]:
+    """Return list of (cx, cy, r) circles representing the shape at its actual pose (x, y, theta)."""
+    if type(shape) is gb.Circle:
+        return [
+            (float(shape.position.x), float(shape.position.y), float(shape.radius))
+        ]
+
+    pos = shape.position
+    x = float(pos.x)
+    y = float(pos.y)
+    th = float(pos.orientation.radians)
+    c, s = np.cos(th), np.sin(th)
+
+    original_pose = shape.position
+    shape.position = gb.shapes_2d.Shape2DPose(0.0, 0.0, 0.0)
+    body_circles = [
+        (float(circ.centre[0]), float(circ.centre[1]), float(circ.radius))
+        for circ in shape.union_of_circles()
+    ]
+    shape.position = original_pose
+
+    return [
+        (x + c * px - s * py, y + s * px + c * py, r)
+        for (px, py, r) in body_circles
+    ]
+
+
+def shape_intersects_bounds(
+    shape: gb.Shape2D, bounds: gb.Bounds2DRectangular
+) -> bool:
+    """Check if a 2D shape intersects the rectangular domain bounds."""
+    if not shape.bounding_box.overlaps(bounds):
+        return False
+    b = bounds.bounds
+    xmin, ymin, xmax, ymax = b["x_min"], b["y_min"], b["x_max"], b["y_max"]
+    for cx, cy, r in get_shape_circles(shape):
+        if circle_intersects_rect(cx, cy, r, xmin, ymin, xmax, ymax):
+            return True
+    return False
+
+
+def generate_periodic_copies(
+    inclusions: "Inclusions2D",
+    domain: CellDomain2D,
+) -> "Inclusions2D":
+    """Generate periodic copies of inclusions that cross domain boundaries.
+
+    For each inclusion crossing any of the domain's boundaries (edges or corners),
+    translated copies shifted by +/- Lx and/or +/- Ly are created and placed on
+    the opposite boundary to ensure spatial continuity across the unit cell.
+    """
+    x_min, x_max = domain.x_bounds
+    y_min, y_max = domain.y_bounds
+    Lx = x_max - x_min
+    Ly = y_max - y_min
+
+    periodic_copies: list[gb.Shape2D] = []
+
+    for shape in inclusions:
+        if getattr(shape, "is_periodic_copy", False):
+            continue
+
+        bb = shape.bounding_box.bounds
+        dx_shifts: list[float] = []
+        if bb["x_min"] < x_min:
+            dx_shifts.append(Lx)
+        if bb["x_max"] > x_max:
+            dx_shifts.append(-Lx)
+
+        dy_shifts: list[float] = []
+        if bb["y_min"] < y_min:
+            dy_shifts.append(Ly)
+        if bb["y_max"] > y_max:
+            dy_shifts.append(-Ly)
+
+        candidate_shifts: list[tuple[float, float]] = []
+        for dx in dx_shifts:
+            candidate_shifts.append((dx, 0.0))
+        for dy in dy_shifts:
+            candidate_shifts.append((0.0, dy))
+        for dx in dx_shifts:
+            for dy in dy_shifts:
+                candidate_shifts.append((dx, dy))
+
+        ori_rad = gb.Angle.rad(float(shape.position.orientation.radians))
+        for dx, dy in candidate_shifts:
+            shifted = shape.clone()
+            shifted.position = gb.shapes_2d.Shape2DPose(
+                float(shape.position.x + dx),
+                float(shape.position.y + dy),
+                ori_rad,
+            )
+            shifted.is_periodic_copy = True
+            if shape_intersects_bounds(shifted, domain.domain):
+                periodic_copies.append(shifted)
+
+    return Inclusions2D(periodic_copies)
+
+
 class Inclusions(Collection[gb.Shape2D]):
     def get_positions(self, flat: bool = False) -> np.ndarray:
         pass
@@ -218,7 +339,10 @@ class Inclusions2D(Inclusions):
 
     @property
     def area(self) -> float:
-        """Total area occupied by the inclusions."""
+        """Total area occupied by the inclusions (excluding periodic copies if primary exist)."""
+        primary = self.primary_inclusions
+        if primary:
+            return sum(inclusion.area for inclusion in primary)
         return sum(inclusion.area for inclusion in self._inclusions)
 
     def area_fraction(self, domain_area: float) -> float:
@@ -237,13 +361,58 @@ class Inclusions2D(Inclusions):
         ]
 
     def get_count(self) -> dict[type[gb.Shape2D], int]:
-        """Return the number of inclusions of each shape type."""
+        """Return the number of inclusions of each shape type (excluding periodic copies if primary exist)."""
         counts: dict[type[gb.Shape2D], int] = defaultdict(int)
 
-        for inclusion in self._inclusions:
+        items = self.primary_inclusions or self._inclusions
+        for inclusion in items:
             counts[type(inclusion)] += 1
 
         return dict(counts)
+
+    @property
+    def primary_inclusions(self) -> list[gb.Shape2D]:
+        """Return only primary inclusions (excluding periodic copies)."""
+        return [
+            inclusion
+            for inclusion in self._inclusions
+            if not getattr(inclusion, "is_periodic_copy", False)
+        ]
+
+    @property
+    def periodic_copies(self) -> list[gb.Shape2D]:
+        """Return only periodic copy inclusions."""
+        return [
+            inclusion
+            for inclusion in self._inclusions
+            if getattr(inclusion, "is_periodic_copy", False)
+        ]
+
+    def make_periodic(self, domain: CellDomain2D) -> Self:
+        """Return a new Inclusions2D with wrapped primary inclusions and their periodic copies."""
+        x_min, x_max = domain.x_bounds
+        y_min, y_max = domain.y_bounds
+        Lx = x_max - x_min
+        Ly = y_max - y_min
+
+        primary = []
+        for shape in self.primary_inclusions:
+            pos = shape.position
+            wrapped_x = x_min + ((pos.x - x_min) % Lx)
+            wrapped_y = y_min + ((pos.y - y_min) % Ly)
+            if not np.isclose(wrapped_x, pos.x) or not np.isclose(wrapped_y, pos.y):
+                s_wrapped = shape.clone()
+                s_wrapped.position = gb.shapes_2d.Shape2DPose(
+                    float(wrapped_x),
+                    float(wrapped_y),
+                    gb.Angle.rad(float(pos.orientation.radians)),
+                )
+                primary.append(s_wrapped)
+            else:
+                primary.append(shape.clone())
+
+        copies = generate_periodic_copies(Inclusions2D(primary), domain)
+        return self.__class__(primary + list(copies))
 
     def clear(self) -> None:
         """Remove all inclusions from the collection."""
@@ -251,9 +420,13 @@ class Inclusions2D(Inclusions):
 
     def clone(self) -> Self:
         """Create a deep copy of this instance."""
-        return self.__class__(
-            [inclusion.clone() for inclusion in self._inclusions]
-        )
+        cloned = []
+        for inclusion in self._inclusions:
+            c = inclusion.clone()
+            if getattr(inclusion, "is_periodic_copy", False):
+                c.is_periodic_copy = True
+            cloned.append(c)
+        return self.__class__(cloned)
 
     def to_dict(self) -> dict:
         return {
@@ -617,6 +790,21 @@ class Cell:
     @property
     def shapes(self) -> Inclusions2D:
         return self._shapes
+
+    @property
+    def primary_shapes(self) -> Inclusions2D:
+        """Return an Inclusions2D collection of only the primary inclusions."""
+        return Inclusions2D(self._shapes.primary_inclusions)
+
+    @property
+    def periodic_shapes(self) -> Inclusions2D:
+        """Return an Inclusions2D collection of only the periodic copy inclusions."""
+        return Inclusions2D(self._shapes.periodic_copies)
+
+    def make_periodic(self) -> Self:
+        """Return a new Cell with periodic copies added for boundary-crossing shapes."""
+        new_shapes = self._shapes.make_periodic(self._domain)
+        return self.__class__(self._domain, new_shapes)
 
     def clone(self) -> Self:
         return self.__class__(self._domain, self._shapes.clone())

@@ -5,7 +5,7 @@ import pytest
 from shapeforge.main import generate_cell_2d, main
 
 
-def test_periodicity_unsupported(tmp_path):
+def test_periodicity_supported(tmp_path):
     cfg_dict = {
         "num_cells": 1,
         "metadata": {
@@ -25,7 +25,7 @@ def test_periodicity_unsupported(tmp_path):
             }
         ],
         "packing": {
-            "periodicity": True,  # Unsupported in 2D cell generation
+            "periodicity": True,
             "min_gap_ratio": 0.05,
             "proj_buffer_ratio": 2.0,
             "adjust_bounds_to_exact_vf": False,
@@ -41,10 +41,11 @@ def test_periodicity_unsupported(tmp_path):
             "dpi": 72,
         },
     }
-    with pytest.raises(
-        NotImplementedError, match="Periodic packing is not yet supported"
-    ):
-        generate_cell_2d(cfg_dict)
+    cells = generate_cell_2d(cfg_dict)
+    assert len(cells) == 1
+    init_cell, final_cell = cells[0]
+    assert len(final_cell.shapes) >= len(final_cell.primary_shapes)
+    assert (tmp_path / "final_0.json").exists()
 
 
 def test_cli_main_invocation(tmp_path, monkeypatch):
