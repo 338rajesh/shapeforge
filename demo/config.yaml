@@ -20,8 +20,8 @@ domain:
   bounds:
     x_min: 0.0
     y_min: 0.0
-    x_max: 50.0
-    y_max: 50.0
+    x_max: 15.0
+    y_max: 15.0
 
 # ----------------------------------------------------------------------------
 # Inclusion Phase Geometry
@@ -35,7 +35,7 @@ shapes:
       # distribution must be defined with "distr_name(loc, scale)" signature
       radius: 1.0 # uniform(1, 0.0)
   - name: Ellipse
-    volume_fraction: 0.20
+    volume_fraction: 0.15
     params:
       # params might be constant or might follow a distribution. Constant
       # values can be passed as float values, while the params with a
@@ -48,9 +48,9 @@ shapes:
 # Packing
 # ----------------------------------------------------------------------------
 packing:
-  periodicity: false
+  periodicity: true
   min_gap_ratio: 0.05
-  proj_buffer_ratio: 2.0
+  proj_buffer_ratio: 0.5
   adjust_bounds_to_exact_vf: false
 
 # ----------------------------------------------------------------------------
@@ -72,7 +72,7 @@ export:
   formats: # png, jpg, pdf, json, pkl, yml, npz
     - png
     - json
-  background: 0
+  background: 125
   facecolor: 255
   image_dimensions: [512, 512]
   dpi: 100
