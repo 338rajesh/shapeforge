@@ -2,3 +2,7 @@ __pycache__
 .venv
 dist
 shapeforge.egg-info
+docs/_build/
+.pytest_cache/
+coverage.xml
+.coverage

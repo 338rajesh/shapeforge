@@ -1,4 +1,20 @@
+"""
+Overlap potential formulation and spatial contact evaluation.
+=============================================================
+
+Defines the mathematical contact potential and analytic gradient evaluation
+for multi-body shape arrangements in 2D bounded or periodic domains.
+
+Each geometric shape is represented as a union of bounding disks
+(obtained via ``shape.union_of_circles()``). Inter-particle penetration is
+evaluated using accelerated $k$-d tree spatial queries (``scipy.spatial.cKDTree``)
+with periodic toroidal distance metrics when periodicity is enabled.
+"""
+
+from __future__ import annotations
+
 import numpy as np
+import numpy.typing as npt
 from gbox.shapes.shapes_2d import Shape2DPose
 from scipy.spatial import cKDTree
 
@@ -8,6 +24,38 @@ from .utils import PI
 
 
 class ShapesOverlap(OptimisationProblem):
+    """
+    Base optimization problem formulation for multi-body overlap minimization.
+
+    Parameters
+    ----------
+    domain : CellDomain
+        Spatial bounding domain.
+    shapes : Inclusions
+        Collection of inclusions to be packed.
+    periodicity : bool, optional
+        Whether to enforce periodic boundary conditions across domain edges
+        (default: False).
+    buffer_thickness_ratio : float, optional
+        Minimum surface-to-surface gap buffer specified as a fraction of each
+        shape's equivalent circle radius (default: 0.05).
+    proj_buffer_ratio : float, optional
+        Buffer ratio used for boundary clipping in non-periodic domains
+        (default: 2.0).
+    rng : np.random.Generator, optional
+        NumPy random number generator for randomized projection damping.
+        If None, ``np.random.default_rng()`` is used.
+
+    Attributes
+    ----------
+    num_inclusions : int
+        Number of inclusions in the system.
+    periodicity : bool
+        Flag indicating whether boundary conditions are periodic.
+    x0 : np.ndarray
+        Flattened initial pose vector of shape ``(3 * N,)``.
+    """
+
     def __init__(
         self,
         domain: CellDomain,
@@ -17,39 +65,91 @@ class ShapesOverlap(OptimisationProblem):
         buffer_thickness_ratio: float = 0.05,
         proj_buffer_ratio: float = 2.0,
         rng: np.random.Generator | None = None,
-    ):
+    ) -> None:
         super().__init__()
-        self.num_inclusions = len(shapes)
-        self.periodicity = periodicity
-        self.x0 = shapes.get_positions(flat=True)
+        self.num_inclusions: int = len(shapes)
+        self.periodicity: bool = periodicity
+        self.x0: np.ndarray = shapes.get_positions(flat=True)
 
-        self.shapes = shapes
-        self.domain = domain
-        self.buffer_thickness_ratio = buffer_thickness_ratio
-        self.proj_buffer_ratio = proj_buffer_ratio
-        self.rng = rng if rng is not None else np.random.default_rng()
+        self.shapes: Inclusions = shapes
+        self.domain: CellDomain = domain
+        self.buffer_thickness_ratio: float = buffer_thickness_ratio
+        self.proj_buffer_ratio: float = proj_buffer_ratio
+        self.rng: np.random.Generator = (
+            rng if rng is not None else np.random.default_rng()
+        )
 
     def _as_flat(self, x: np.ndarray) -> np.ndarray:
+        """
+        Flatten an $(N, 3)$ pose matrix into a $1$D Fortran-ordered vector.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Matrix of shape ``(N, 3)`` where columns represent $x$, $y$, $\\theta$.
+
+        Returns
+        -------
+        np.ndarray
+            Flattened 1D array of shape ``(3 * N,)``.
+        """
         return x.flatten(order="F")
 
     def _as_matrix(self, x: np.ndarray) -> np.ndarray:
+        """
+        Reshape a $1$D flattened vector of length $3N$ into an $(N, 3)$ pose matrix.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Flattened 1D parameter array of shape ``(3 * N,)``.
+
+        Returns
+        -------
+        np.ndarray
+            Matrix of shape ``(N, 3)``.
+        """
         return x.reshape(self.num_inclusions, -1, order="F")
 
 
 class CellShapes2DOverlap(ShapesOverlap):
-    """
-    Overlap cost for a 2-D cell with inclusions, supporting periodic boundaries.
+    r"""
+    Overlap penalty cost and analytic gradient for 2D cell packing.
+
+    Approximates each inclusion as a union of body-frame disks. Computes the
+    aggregate overlap potential:
+
+    $$f(x) = \sum_{k < l} \max\left(0, (r_k^{\text{eff}} + r_l^{\text{eff}}) - d_{kl}\right)^2$$
+
+    and its analytic gradient $\nabla f(x) = [\nabla_x f, \nabla_y f, \nabla_\theta f]$
+    via the kinematic chain rule.
 
     Parameters
     ----------
     domain : CellDomain2D
+        The 2D rectangular domain.
     shapes : Inclusions2D
+        The collection of 2D inclusions to arrange.
     periodicity : bool, optional
-        Whether to enforce periodic boundary conditions across domain edges (default: False).
+        Whether periodic toroidal boundary conditions are enabled (default: False).
     buffer_thickness_ratio : float, optional
-        Minimum surface-to-surface gap as a fraction of each shape's equivalent radius.
+        Buffer gap fraction applied to effective radii (default: 0.05).
     proj_buffer_ratio : float, optional
-        Projection buffer thickness ratio (used in non-periodic projection).
+        Projection boundary buffer ratio for non-periodic domains (default: 2.0).
+    rng : np.random.Generator, optional
+        Random generator for projection damping. If None, default generator is used.
+
+    Examples
+    --------
+    >>> import gbox as gb
+    >>> from shapeforge.cell import CellDomain2D, Inclusions2D
+    >>> from shapeforge.overlap_optim import CellShapes2DOverlap
+    >>> domain = CellDomain2D([0, 0, 10, 10])
+    >>> shapes = Inclusions2D([gb.Circle(1.0, centre=[2, 2]), gb.Circle(1.0, centre=[2.5, 2])])
+    >>> prob = CellShapes2DOverlap(domain, shapes)
+    >>> cost = prob.func(prob.x0)
+    >>> cost > 0.0
+    True
     """
 
     def __init__(
@@ -61,7 +161,7 @@ class CellShapes2DOverlap(ShapesOverlap):
         buffer_thickness_ratio: float = 0.05,
         proj_buffer_ratio: float = 2.0,
         rng: np.random.Generator | None = None,
-    ):
+    ) -> None:
         super().__init__(
             domain,
             shapes,
@@ -71,13 +171,13 @@ class CellShapes2DOverlap(ShapesOverlap):
             rng=rng,
         )
         bounds_dict = domain.bounds.to_dict()
-        self._xmin = float(bounds_dict["x_min"])
-        self._xmax = float(bounds_dict["x_max"])
-        self._ymin = float(bounds_dict["y_min"])
-        self._ymax = float(bounds_dict["y_max"])
-        self._Lx = self._xmax - self._xmin
-        self._Ly = self._ymax - self._ymin
-        self._boxsize = (
+        self._xmin: float = float(bounds_dict["x_min"])
+        self._xmax: float = float(bounds_dict["x_max"])
+        self._ymin: float = float(bounds_dict["y_min"])
+        self._ymax: float = float(bounds_dict["y_max"])
+        self._Lx: float = self._xmax - self._xmin
+        self._Ly: float = self._ymax - self._ymin
+        self._boxsize: np.ndarray | None = (
             np.array([self._Lx, self._Ly], dtype=float)
             if periodicity
             else None
@@ -87,16 +187,16 @@ class CellShapes2DOverlap(ShapesOverlap):
             self.x0 = self.projection(self.x0)
 
         equivalent_circle_radii = shapes.get_equivalent_circle_radii()
-        self._ssd = equivalent_circle_radii * buffer_thickness_ratio
-        self._radii = equivalent_circle_radii
+        self._ssd: np.ndarray = equivalent_circle_radii * buffer_thickness_ratio
+        self._radii: np.ndarray = equivalent_circle_radii
 
-        self._templates = self._build_templates()  # body-frame circles
+        self._templates: list[np.ndarray] = self._build_templates()
         self._build_circle_arrays()
-        self._cache_x = None
-        self._cache = None
+        self._cache_x: np.ndarray | None = None
+        self._cache: tuple[float, np.ndarray] | None = None
 
     def _build_circle_arrays(self) -> None:
-        """Precompute flattened circle attributes for vectorized cKDTree evaluation."""
+        """Precompute flattened circle attributes for vectorized cKDTree queries."""
         shape_idx_list = []
         px_list = []
         py_list = []
@@ -125,11 +225,16 @@ class CellShapes2DOverlap(ShapesOverlap):
         else:
             self._max_reach = 0.0
 
-    # ------------------------------------------------------------------
-    # Geometry: a pure function of x, never reads self.shapes
-    # ------------------------------------------------------------------
     def _build_templates(self) -> list[np.ndarray]:
-        """Body-frame circles (cx, cy, r) for each shape, at pose (0, 0, 0)."""
+        """
+        Extract body-frame circle representations $(c_x, c_y, r)$ at pose $(0, 0, 0)$.
+
+        Returns
+        -------
+        list of np.ndarray
+            List of template arrays for each shape, where each array has shape
+            ``(M_i, 3)``.
+        """
         templates = []
         for shape in self.shapes:
             original_pose = shape.position
@@ -142,8 +247,22 @@ class CellShapes2DOverlap(ShapesOverlap):
             templates.append(np.asarray(circles, dtype=float))
         return templates
 
-    def _circles_at(self, positions: np.ndarray):
-        """World-frame circle centres and radii for every shape at (N, 3) poses."""
+    def _circles_at(
+        self, positions: np.ndarray
+    ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        """
+        Transform body-frame circles to world coordinates for given poses.
+
+        Parameters
+        ----------
+        positions : np.ndarray
+            Matrix of poses with shape ``(N, 3)``.
+
+        Returns
+        -------
+        list of tuple
+            List of tuples ``(world_cx, world_cy, radii)`` per shape.
+        """
         out = []
         for (x, y, th), tpl in zip(positions, self._templates):
             c, s = np.cos(th), np.sin(th)
@@ -151,15 +270,25 @@ class CellShapes2DOverlap(ShapesOverlap):
             out.append((x + c * px - s * py, y + s * px + c * py, r))
         return out
 
-    # ------------------------------------------------------------------
-    # Cost and gradient, evaluated together and cached on x
-    # ------------------------------------------------------------------
-    def _evaluate(self, x: np.ndarray):
+    def _evaluate(self, x: np.ndarray) -> tuple[float, np.ndarray]:
+        """
+        Evaluate cost and analytic gradient jointly, caching on parameter array `x`.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Flattened pose vector of shape ``(3 * N,)``.
+
+        Returns
+        -------
+        tuple of (float, np.ndarray)
+            Tuple containing the scalar overlap cost and 1D gradient array.
+        """
         x = np.asarray(x, dtype=float)
         if self._cache_x is not None and np.array_equal(x, self._cache_x):
             return self._cache
 
-        pos = self._as_matrix(x)  # (N, 3): x, y, theta
+        pos = self._as_matrix(x)
         N = self.num_inclusions
         K = len(self._shape_idx)
 
@@ -222,7 +351,7 @@ class CellShapes2DOverlap(ShapesOverlap):
                 d = np.hypot(dx, dy)
                 c = (
                     self._circle_eff_radii[k] + self._circle_eff_radii[l]
-                ) - d  # penetration depth
+                ) - d
 
                 mask = c > 0.0
                 if mask.any():
@@ -234,7 +363,6 @@ class CellShapes2DOverlap(ShapesOverlap):
                     dy_act = dy[mask]
 
                     cost = float(np.sum(c_act**2))
-                    # d(c^2)/d(centre_k) = -2c * (ck - cl) / d
                     w = -2.0 * c_act / np.maximum(d_act, 1e-12)
                     w_dx = w * dx_act
                     w_dy = w * dy_act
@@ -244,7 +372,6 @@ class CellShapes2DOverlap(ShapesOverlap):
                     np.add.at(gcy, k_act, w_dy)
                     np.add.at(gcy, l_act, -w_dy)
 
-        # Chain rule: centre = (x, y) + R(theta) p_k
         gx = np.zeros(N, dtype=float)
         gy = np.zeros(N, dtype=float)
         gth = np.zeros(N, dtype=float)
@@ -260,28 +387,69 @@ class CellShapes2DOverlap(ShapesOverlap):
         )
         np.add.at(gth, self._shape_idx, dth_k)
 
-        grad = np.concatenate([gx, gy, gth])  # matches _as_flat order
+        grad = np.concatenate([gx, gy, gth])
         self._cache_x = x.copy()
         self._cache = (cost, grad)
         return self._cache
 
     def func(self, x: np.ndarray) -> float:
+        """
+        Evaluate scalar overlap cost at pose vector `x`.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Flattened pose vector of shape ``(3 * N,)``.
+
+        Returns
+        -------
+        float
+            Sum of squared overlapping penetrations across all shape pairs.
+        """
         self._eval_count["func"] += 1
         return self._evaluate(x)[0]
 
-    def grad(self, x: np.ndarray) -> None:
+    def grad(self, x: np.ndarray) -> np.ndarray:
+        """
+        Evaluate the analytic gradient vector at pose vector `x`.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Flattened pose vector of shape ``(3 * N,)``.
+
+        Returns
+        -------
+        np.ndarray
+            1D gradient array of shape ``(3 * N,)`` ordered as
+            ``[gx_1, ..., gx_N, gy_1, ..., gy_N, gth_1, ..., gth_N]``.
+        """
         self._eval_count["grad"] += 1
         return self._evaluate(x)[1]
 
     def projection(self, x: np.ndarray) -> np.ndarray:
+        """
+        Project candidate poses onto the domain bounding constraints.
+
+        In periodic mode, the projection is identity (all poses on the torus
+        manifold are feasible). In non-periodic mode, coordinates are clipped
+        within domain boundaries with randomized buffer damping.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Candidate pose vector of shape ``(3 * N,)``.
+
+        Returns
+        -------
+        np.ndarray
+            Feasible projected pose vector of shape ``(3 * N,)``.
+        """
         if self.periodicity:
-            # On a torus manifold, all points are feasible (no physical boundary walls).
-            # Identity projection avoids artificial coordinate jumps and spurious
-            # repulsion/ascent directions in line search across periodic boundaries.
             self._eval_count["proj"] += 1
             return x.copy()
 
-        positions = self._as_matrix(x)  # -> (N, 3) shaped matrix
+        positions = self._as_matrix(x)
         bounds = self.domain.bounds.to_dict()
         xlb, xub = bounds["x_min"], bounds["x_max"]
         ylb, yub = bounds["y_min"], bounds["y_max"]

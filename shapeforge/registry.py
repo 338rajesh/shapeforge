@@ -1,54 +1,115 @@
+"""
+Dynamic shape registry and custom shape loader.
+===============================================
+
+Provides the central registry :class:`ShapeRegistry` and convenience decorator
+:func:`register_shape` allowing users to define, register, and import custom 2D
+geometric inclusion types extending :class:`gbox.Shape2D`.
+"""
+
 from __future__ import annotations
 
 import importlib.util
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import gbox as gb
 
 
 class ShapeRegistry:
-    """Central registry for 2D shapes supported by ShapeForge.
+    """
+    Central registry for 2D inclusion shape types supported by ShapeForge.
 
-    Starts pre-populated with built-in gbox shapes ('circle', 'ellipse').
-    Users can register custom subclasses of ``gb.Shape2D`` either via code:
-        ShapeRegistry.register("capsule", Capsule)
+    Starts pre-populated with built-in ``gbox`` shapes (``'circle'``, ``'ellipse'``).
+    Users can register custom subclasses of :class:`gbox.Shape2D` via code:
+
+    >>> ShapeRegistry.register("capsule", Capsule)
+
     via decorator:
-        @register_shape("capsule")
-        class Capsule(gb.Shape2D): ...
-    or by dynamically loading from Python files:
-        ShapeRegistry.load_file("path/to/my_shapes.py")
+
+    >>> @register_shape("capsule")
+    ... class Capsule(gb.Shape2D):
+    ...     pass
+
+    or dynamically from external Python files:
+
+    >>> ShapeRegistry.load_file("my_shapes.py")
+
+    Attributes
+    ----------
+    _shapes_2d : dict[str, type[gb.Shape2D]]
+        Internal mapping of normalized shape names to class objects.
+    _initialized : bool
+        Flag indicating whether defaults have been loaded.
     """
 
-    _shapes_2d: dict[str, type[gb.Shape2D]] = {}  # noqa: RUF012
+    _shapes_2d: dict[str, type[gb.Shape2D]] = {}
     _initialized: bool = False
 
     @classmethod
     def _ensure_initialized(cls) -> None:
+        """Ensure built-in shape classes are populated in the registry."""
         if not cls._initialized:
             cls.reset()
 
     @classmethod
     def reset(cls) -> None:
-        """Reset registry back to default built-in gbox shapes."""
+        """
+        Reset the registry back to default built-in ``gbox`` shapes.
+
+        Clears any dynamically added custom shapes and restores standard
+        built-in shape mappings (``'circle'``, ``'ellipse'``).
+        """
         cls._shapes_2d = dict(gb.shapes.SHAPES_2D_MAPPING)
         cls._initialized = True
 
     @classmethod
     def register(
         cls,
-        name: str | None = None,
+        name: str | type[gb.Shape2D] | None = None,
         shape_cls: type[gb.Shape2D] | None = None,
     ) -> Callable[[type[gb.Shape2D]], type[gb.Shape2D]] | type[gb.Shape2D]:
-        """Register a Shape2D subclass in the registry.
+        """
+        Register a :class:`gbox.Shape2D` subclass in the registry.
+
+        Can be called as a direct function:
+        ``ShapeRegistry.register('my_shape', MyShape)``
+        or as a decorator:
+        ``@ShapeRegistry.register('my_shape')`` or ``@ShapeRegistry.register``.
 
         Parameters
         ----------
-        name : str, optional
-            Name/identifier for the shape (case-insensitive).
+        name : str or type[gb.Shape2D] or None, optional
+            Identifier string for the shape (case-insensitive). If omitted when
+            used as a decorator, defaults to the lowercase class name.
         shape_cls : type[gb.Shape2D], optional
-            The Shape2D subclass to register.
+            The :class:`gbox.Shape2D` subclass to register.
+
+        Returns
+        -------
+        Callable or type[gb.Shape2D]
+            The registered class or a decorator function returning the class.
+
+        Raises
+        ------
+        TypeError
+            If ``shape_cls`` is not a subclass of :class:`gbox.Shape2D`.
+        ValueError
+            If the shape class does not implement a callable ``from_params`` method
+            or if the name is an empty string.
+
+        Examples
+        --------
+        >>> from shapeforge.registry import ShapeRegistry
+        >>> @ShapeRegistry.register("custom_disk")
+        ... class CustomDisk(gb.Circle):
+        ...     @classmethod
+        ...     def from_params(cls, **params):
+        ...         return cls(radius=params.get("r", 1.0))
+        >>> ShapeRegistry.has("custom_disk")
+        True
         """
         cls._ensure_initialized()
 
@@ -74,15 +135,14 @@ class ShapeRegistry:
             return s_cls
 
         if shape_cls is not None:
-            actual_name = name or shape_cls.__name__.lower()
+            actual_name = str(name) if name is not None else shape_cls.__name__.lower()
             return _do_register(actual_name, shape_cls)
 
         def decorator(s_cls: type[gb.Shape2D]) -> type[gb.Shape2D]:
-            actual_name = name or s_cls.__name__.lower()
+            actual_name = str(name) if name is not None else s_cls.__name__.lower()
             return _do_register(actual_name, s_cls)
 
         if isinstance(name, type) and issubclass(name, gb.Shape2D):
-            # Used as @ShapeRegistry.register without arguments
             s_cls = name
             return _do_register(s_cls.__name__.lower(), s_cls)
 
@@ -90,7 +150,24 @@ class ShapeRegistry:
 
     @classmethod
     def get(cls, name: str) -> type[gb.Shape2D]:
-        """Get registered shape class by name (case-insensitive)."""
+        """
+        Retrieve a registered shape class by name (case-insensitive).
+
+        Parameters
+        ----------
+        name : str
+            Shape identifier.
+
+        Returns
+        -------
+        type[gb.Shape2D]
+            Class object associated with the identifier.
+
+        Raises
+        ------
+        KeyError
+            If ``name`` is not registered.
+        """
         cls._ensure_initialized()
         key = name.strip().lower()
         if key not in cls._shapes_2d:
@@ -102,29 +179,59 @@ class ShapeRegistry:
 
     @classmethod
     def has(cls, name: str) -> bool:
-        """Check if shape name is registered (case-insensitive)."""
+        """
+        Check whether a shape name is registered (case-insensitive).
+
+        Parameters
+        ----------
+        name : str
+            Shape identifier to check.
+
+        Returns
+        -------
+        bool
+            True if registered, False otherwise.
+        """
         cls._ensure_initialized()
         return name.strip().lower() in cls._shapes_2d
 
     @classmethod
     def available_shapes(cls) -> list[str]:
-        """Return sorted list of available shape names."""
+        """
+        Return a sorted list of all currently available shape names.
+
+        Returns
+        -------
+        list of str
+            Sorted list of registered shape identifiers.
+        """
         cls._ensure_initialized()
         return sorted(cls._shapes_2d.keys())
 
     @classmethod
     def load_file(cls, path: str | Path) -> list[str]:
-        """Dynamically load and register custom shapes from a Python file.
+        """
+        Dynamically import and register custom shape classes from a Python file.
+
+        Executes the file in an isolated namespace and auto-registers any
+        :class:`gbox.Shape2D` subclasses defined within it.
 
         Parameters
         ----------
         path : str or Path
-            Path to the Python file containing Shape2D subclass(es).
+            Path to the Python file containing custom shape definitions.
 
         Returns
         -------
-        list[str]
-            List of registered shape names loaded from the file.
+        list of str
+            List of registered shape identifiers loaded from the file.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the file does not exist on disk.
+        ImportError
+            If module specification cannot be created or loaded.
         """
         cls._ensure_initialized()
         file_path = Path(path).resolve()
@@ -169,8 +276,32 @@ class ShapeRegistry:
 
 
 def register_shape(
-    name: str | None = None,
+    name: str | type[gb.Shape2D] | None = None,
     shape_cls: type[gb.Shape2D] | None = None,
-):
-    """Decorator or helper to register a custom shape in ShapeRegistry."""
+) -> Callable[[type[gb.Shape2D]], type[gb.Shape2D]] | type[gb.Shape2D]:
+    """
+    Decorator or helper function to register a custom shape in :class:`ShapeRegistry`.
+
+    Parameters
+    ----------
+    name : str or type[gb.Shape2D] or None, optional
+        Shape name/identifier. If omitted, uses lowercase class name.
+    shape_cls : type[gb.Shape2D], optional
+        The shape class being registered.
+
+    Returns
+    -------
+    Callable or type[gb.Shape2D]
+        The registered class or decorator.
+
+    Examples
+    --------
+    >>> from shapeforge import register_shape
+    >>> import gbox as gb
+    >>> @register_shape("star")
+    ... class Star(gb.Shape2D):
+    ...     @classmethod
+    ...     def from_params(cls, **params):
+    ...         return cls()
+    """
     return ShapeRegistry.register(name, shape_cls)

@@ -1,3 +1,15 @@
+"""
+Command-Line Interface (CLI) and high-level cell generation entry points.
+=========================================================================
+
+Provides the CLI executable ``shapeforge`` and the primary Python API function
+:func:`generate_cell_2d`. Coordinates configuration parsing, custom shape loading,
+spatial domain construction, inclusion sampling, NM-SPG overlap resolution,
+periodic boundary wrapping, image plotting, and file exports.
+"""
+
+from __future__ import annotations
+
 import argparse
 import logging
 import time
@@ -19,14 +31,27 @@ logger = get_logger(__name__)
 def _generate_cell_2d_core(
     cfg: ShapeForgeConfig,
 ) -> Sequence[tuple[Cell, Cell]]:
+    """
+    Execute the core cell generation loop across all requested unit cells.
+
+    Parameters
+    ----------
+    cfg : ShapeForgeConfig
+        Fully validated configuration object.
+
+    Returns
+    -------
+    Sequence of tuple of (Cell, Cell)
+        List of 2-tuples ``(initial_cell, final_cell)`` for each generated unit cell.
+    """
     out_dir = Path(cfg.export.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     cells: list[tuple[Cell, Cell]] = [
-        (None, None) for _ in range(cfg.num_cells)
+        (None, None) for _ in range(cfg.num_cells)  # type: ignore[misc]
     ]
 
-    solver_options = {
+    solver_options: dict[str, Any] = {
         "method": "nmspg",
         "iter_max": 1000,
         "iter_memory": 10,
@@ -62,10 +87,8 @@ def _generate_cell_2d_core(
     data_formats = [
         fmt
         for fmt in cfg.export.formats
-        if fmt.lower() in ("json", "yaml", "yml", "pkl", "pickle", "npz")
+        if fmt.lower() in ("json", "pkl", "pickle", "yaml", "yml", "npz")
     ]
-
-    logger.info(f"Running ShapeForge task: {cfg.metadata.title}")
 
     for index in range(cfg.num_cells):
         t0 = time.perf_counter()
@@ -208,26 +231,47 @@ def generate_cell_2d(
     profile_sort: str = "cumulative",
 ) -> Sequence[tuple[Cell, Cell]]:
     """
-    Generate a unit cell with the specified configuration.
+    Generate 2D unit cells from a dictionary or configuration file.
+
+    This is the primary Python API entry point for ShapeForge. It loads the
+    configuration, imports any declared custom shapes, initializes inclusion
+    geometries, resolves spatial overlaps using the NM-SPG solver, enforces
+    periodicity, exports plots/data, and optionally profiles the run.
 
     Parameters
     ----------
-    config : dict | str | Path
-        Configuration mapping or path to YAML/JSON configuration file.
-    custom_shapes : Sequence[str | Path] | None, optional
+    config : dict or str or Path
+        Configuration dictionary or filesystem path to a YAML/JSON configuration file.
+    custom_shapes : Sequence of (str or Path), optional
         Additional paths to Python files defining custom shapes to register.
-    log_level : str | None, optional
-        Logging level override (e.g. 'DEBUG', 'INFO'). If None, uses metadata.log_level from config.
+    log_level : str, optional
+        Logging level override (e.g. ``'DEBUG'``, ``'INFO'``). If None, uses
+        ``metadata.log_level`` from the configuration.
     profile : bool, optional
-        Whether to profile the cell generation run (default: False).
-    profile_output : str | Path | None, optional
-        Destination file path for the .prof binary profile data. If None,
-        defaults to '<export.output_dir>/shapeforge.prof'.
+        Whether to profile the cell generation execution with cProfile (default: False).
+    profile_output : str or Path, optional
+        Destination path for the binary ``.prof`` file. If None, defaults to
+        ``<export.output_dir>/shapeforge.prof``.
     profile_lines : int, optional
-        Number of hotspot entries to display in the terminal summary (default: 25).
-    profile_sort : str, optional
-        Sort criterion for profiling stats: 'cumulative', 'time', or 'calls'
-        (default: 'cumulative').
+        Number of bottleneck functions to display in the terminal summary (default: 25).
+    profile_sort : {'cumulative', 'time', 'calls'}, optional
+        Sorting metric for profiling diagnostics (default: ``'cumulative'``).
+
+    Returns
+    -------
+    Sequence of tuple of (Cell, Cell)
+        List of 2-tuples ``(initial_cell, final_cell)`` corresponding to each
+        generated unit cell.
+
+    Examples
+    --------
+    >>> from shapeforge import generate_cell_2d
+    >>> cells = generate_cell_2d("demo/custom_shape/config.yaml")
+    >>> len(cells)
+    2
+    >>> init_0, final_0 = cells[0]
+    >>> final_0.domain.area
+    900.0
     """
     base_dir = (
         Path(config).parent.resolve()
@@ -271,6 +315,14 @@ def generate_cell_2d(
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """
+    Construct the command-line argument parser for the ShapeForge CLI.
+
+    Returns
+    -------
+    argparse.ArgumentParser
+        Configured argument parser for CLI execution.
+    """
     _log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
     parser = argparse.ArgumentParser(
@@ -321,7 +373,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main():
+def main() -> None:
+    """
+    Primary CLI command entry point for the ``shapeforge`` command.
+
+    Parses command-line arguments and delegates to :func:`generate_cell_2d`.
+    """
     parser = build_parser()
     args = parser.parse_args()
     generate_cell_2d(
@@ -333,7 +390,3 @@ def main():
         profile_lines=args.profile_lines,
         profile_sort=args.profile_sort,
     )
-
-
-if __name__ == "__main__":
-    main()

@@ -44,8 +44,7 @@ dev = [
 Homepage = "https://github.com/338rajesh/shapeforge"
 Repository = "https://github.com/338rajesh/shapeforge"
 Issues = "https://github.com/338rajesh/shapeforge/issues"
-
-# Documentation = "https://shapeforge.readthedocs.io"  # Uncomment if docs are hosted
+Documentation = "https://shapeforge.readthedocs.io"
 
 # add `shapeforge` command to PATH
 [project.scripts]
