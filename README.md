@@ -1,9 +1,12 @@
 # ShapeForge
 
-[![CI](https://github.com/338rajesh/shapeforge/actions/workflows/ci.yml/badge.svg)](https://github.com/338rajesh/shapeforge/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/338rajesh/shapeforge/graph/badge.svg)](https://codecov.io/gh/338rajesh/shapeforge)
+[![CI](https://github.com/338rajesh/shapeforge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/338rajesh/shapeforge/actions/workflows/ci.yml)
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
+[![Documentation Status](https://readthedocs.org/projects/shapeforge/badge/?version=latest)](https://shapeforge.readthedocs.io/en/latest/?badge=latest)
+[![codecov](https://codecov.io/gh/338rajesh/shapeforge/graph/badge.svg)](https://codecov.io/gh/338rajesh/shapeforge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![PyPI Version](https://img.shields.io/pypi/v/shapeforge.svg?logo=pypi&logoColor=white)](https://pypi.org/project/shapeforge/)
+	[![Downloads](https://img.shields.io/pypi/dm/shapeforge.svg)](https://pypi.org/project/shapeforge/)
 
 A high-performance Python package for generating 2D and 3D Representative Volume Elements (RVE) and unit cells containing geometric inclusions following specified size, orientation, and spatial distributions.
 
