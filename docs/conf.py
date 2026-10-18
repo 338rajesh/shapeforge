@@ -28,7 +28,6 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinx.ext.mathjax",
     "sphinx.ext.intersphinx",
-    "sphinx_rtd_theme",
     "sphinx_copybutton",
     "myst_parser",
 ]
@@ -50,6 +49,7 @@ napoleon_preprocess_types = True
 # Autodoc settings
 autodoc_member_order = "bysource"
 autodoc_typehints = "description"
+autodoc_class_signature = "separated"
 autodoc_default_options = {
     "members": True,
     "undoc-members": True,
@@ -76,20 +76,22 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = "sphinx_rtd_theme"
+html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
 html_title = "ShapeForge Documentation"
 
 html_theme_options = {
-    "logo_only": False,
-    "display_version": True,
-    "prev_next_buttons_location": "bottom",
-    "style_external_links": False,
-    "collapse_navigation": False,
-    "sticky_navigation": True,
+    "github_url": "https://github.com/338rajesh/shapeforge",
+    "logo": {
+        "text": "ShapeForge",
+    },
+    "navbar_align": "left",
     "navigation_depth": 4,
-    "includehidden": True,
-    "titles_only": False,
+    "show_nav_level": 2,
+    "show_toc_level": 2,
+    "collapse_navigation": False,
+    "footer_start": ["copyright"],
+    "footer_end": ["sphinx-version", "theme-version"],
 }
 
 copybutton_prompt_text = r">>> |\.\.\. |\$ "

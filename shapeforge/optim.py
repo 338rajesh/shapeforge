@@ -299,8 +299,9 @@ def nmspg(
 
     Notes
     -----
-    The spectral step length $\\lambda_k$ is computed using the Barzilai-Borwein
-    formula:
+    The algorithm implements the spectral projected gradient framework of Birgin
+    et al. [1]_. The spectral step length $\lambda_k$ is computed using the
+    Barzilai-Borwein formula:
 
     $$\\lambda_k = \\frac{s_{k-1}^T s_{k-1}}{s_{k-1}^T y_{k-1}}$$
 

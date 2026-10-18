@@ -54,6 +54,7 @@ class CellPlotter(gb.ShapesPlotter):
     or directly into rasterized NumPy image arrays.
 
     For custom shapes (subclasses of :class:`gbox.Shape2D`), rendering priority is:
+
     1. If the shape defines :meth:`to_patch` or :meth:`as_patch`, it uses the returned
        Matplotlib :class:`matplotlib.patches.Patch` (or sequence of patches) directly.
     2. If the shape defines :meth:`boundary_points` or :meth:`get_boundary_points`,

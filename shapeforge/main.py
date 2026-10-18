@@ -1,6 +1,6 @@
 """
 Command-Line Interface (CLI) and high-level cell generation entry points.
-========================================================================
+=========================================================================
 
 Provides the CLI executable ``shapeforge`` and the primary Python API function
 :func:`generate_cell_2d`. Coordinates configuration parsing, custom shape loading,
